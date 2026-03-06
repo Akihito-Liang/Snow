@@ -1,4 +1,6 @@
 using UnityEngine;
+using Snow2;
+using Snow2.Player;
 
 namespace Snow2.Enemies
 {
@@ -19,6 +21,16 @@ namespace Snow2.Enemies
         [Min(0f)]
         public float MaxStepDownHeight = 0f;
 
+        [Header("Bump Bounce (Player)")]
+        [Min(0f)]
+        public float PlayerBumpBounceMultiplier = 0.9f;
+        [Min(0f)]
+        public float PlayerBumpMinSpeed = 3.0f;
+        [Min(0f)]
+        public float PlayerBumpDamping = 12f;
+        [Min(0f)]
+        public float PlayerBumpCooldownSeconds = 0.08f;
+
         private enum State
         {
             Normal,
@@ -34,8 +46,14 @@ namespace Snow2.Enemies
         private BoxCollider2D _box;
         private CircleCollider2D _circle;
 
+        // 冻结过渡：红方块 -> 白圆形（用一个叠加的圆形 SpriteRenderer 渐显）
+        private SpriteRenderer _snowCircleOverlay;
+
         private float _dir = 1f;
         private bool _registered;
+
+        private Vector2 _playerBumpVelocity;
+        private float _nextPlayerBumpAt;
 
         private Collider2D _bodyCol;
 
@@ -46,6 +64,10 @@ namespace Snow2.Enemies
         private float _nextDebugAt;
 
         private static readonly Color NormalColor = new Color(0.9f, 0.1f, 0.1f);
+
+        public bool IsNormal => _state == State.Normal;
+        public bool IsFrozen => _state == State.Frozen;
+        public bool IsDead => _state == State.Dead;
 
         private void Awake()
         {
@@ -72,6 +94,10 @@ namespace Snow2.Enemies
         {
             if (_sr != null)
             {
+                if (_sr.sprite == null)
+                {
+                    _sr.sprite = RuntimeSpriteLibrary.WhiteSprite;
+                }
                 _sr.color = NormalColor;
             }
 
@@ -108,6 +134,17 @@ namespace Snow2.Enemies
                 return;
             }
 
+            // 外力/反弹速度逐步衰减（用于敌人与玩家接触时的“弹开”）。
+            if (_playerBumpVelocity.sqrMagnitude > 0.0001f)
+            {
+                var k = 1f - Mathf.Exp(-Mathf.Max(0f, PlayerBumpDamping) * Time.fixedDeltaTime);
+                _playerBumpVelocity = Vector2.Lerp(_playerBumpVelocity, Vector2.zero, k);
+            }
+            else
+            {
+                _playerBumpVelocity = Vector2.zero;
+            }
+
             var flipReason = 0; // 0=none 1=wall 2=edge
             if (ShouldFlipByWall()) flipReason = 1;
             else if (ShouldFlipByEdge()) flipReason = 2;
@@ -120,7 +157,8 @@ namespace Snow2.Enemies
             // 与 Player 保持一致：用 MovePosition 做水平移动。
             var rbPos = _rb.position;
             var beforeX = rbPos.x;
-            rbPos.x += _dir * PatrolSpeed * Time.fixedDeltaTime;
+            rbPos.x += (_dir * PatrolSpeed + _playerBumpVelocity.x) * Time.fixedDeltaTime;
+            rbPos.y += _playerBumpVelocity.y * Time.fixedDeltaTime;
             _rb.MovePosition(rbPos);
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
@@ -220,7 +258,21 @@ namespace Snow2.Enemies
             var t = Mathf.Clamp01(_snowHits / Mathf.Max(1f, HitsToFreeze));
             if (_sr != null)
             {
-                _sr.color = Color.Lerp(NormalColor, Color.white, t);
+                // 逐步冻结：底层方块逐渐变白并淡出；上层圆形逐渐淡入。
+                EnsureSnowOverlay();
+
+                var baseCol = Color.Lerp(NormalColor, Color.white, t);
+                baseCol.a = 1f - t;
+                _sr.sprite = RuntimeSpriteLibrary.WhiteSprite;
+                _sr.color = baseCol;
+
+                if (_snowCircleOverlay != null)
+                {
+                    var c = Color.white;
+                    c.a = t;
+                    _snowCircleOverlay.sprite = RuntimeSpriteLibrary.CircleSprite;
+                    _snowCircleOverlay.color = c;
+                }
             }
 
             if (_snowHits >= HitsToFreeze)
@@ -237,6 +289,12 @@ namespace Snow2.Enemies
             }
 
             _state = State.Frozen;
+
+            // 冻结后变成“可推动雪球”。
+            if (GetComponent<Snowball>() == null)
+            {
+                gameObject.AddComponent<Snowball>();
+            }
 
             if (_rb != null)
             {
@@ -261,7 +319,13 @@ namespace Snow2.Enemies
             // 变成“雪球”后外观为白色
             if (_sr != null)
             {
+                _sr.sprite = RuntimeSpriteLibrary.CircleSprite;
                 _sr.color = Color.white;
+                if (_snowCircleOverlay != null)
+                {
+                    Destroy(_snowCircleOverlay.gameObject);
+                    _snowCircleOverlay = null;
+                }
             }
 
             // 给一点点旋转/滚动初速度，让推动更有“球”感（不会太强）
@@ -269,6 +333,30 @@ namespace Snow2.Enemies
             {
                 _rb.AddTorque(Random.Range(-0.6f, 0.6f), ForceMode2D.Impulse);
             }
+        }
+
+        private void EnsureSnowOverlay()
+        {
+            if (_snowCircleOverlay != null)
+            {
+                return;
+            }
+            if (_sr == null)
+            {
+                return;
+            }
+
+            var go = new GameObject("SnowCircleOverlay");
+            go.transform.SetParent(transform, worldPositionStays: false);
+            go.transform.localPosition = Vector3.zero;
+            go.transform.localRotation = Quaternion.identity;
+            go.transform.localScale = Vector3.one;
+
+            _snowCircleOverlay = go.AddComponent<SpriteRenderer>();
+            _snowCircleOverlay.sprite = RuntimeSpriteLibrary.CircleSprite;
+            _snowCircleOverlay.color = new Color(1f, 1f, 1f, 0f);
+            _snowCircleOverlay.sortingLayerID = _sr.sortingLayerID;
+            _snowCircleOverlay.sortingOrder = _sr.sortingOrder + 1;
         }
 
         private void OnCollisionEnter2D(Collision2D collision)
@@ -281,6 +369,12 @@ namespace Snow2.Enemies
             // Normal：与任何“非触发器”发生水平碰撞（包含敌人之间互撞）就反向。
             if (_state == State.Normal)
             {
+                // 与玩家接触：按“入射速度”反射弹开，避免双方互相顶住卡死。
+                if (collision.collider.GetComponent<PlayerController2D>() != null)
+                {
+                    TryBounceFromPlayer(collision);
+                }
+
                 if (!collision.collider.isTrigger)
                 {
                     for (var i = 0; i < collision.contactCount; i++)
@@ -311,17 +405,19 @@ namespace Snow2.Enemies
                 return;
             }
 
+            // 若已挂载 Snowball 组件，则由 Snowball 负责反弹/连击击杀等玩法逻辑。
+            if (GetComponent<Snowball>() != null)
+            {
+                return;
+            }
+
             var otherEnemy = collision.collider.GetComponent<EnemyController>();
             if (otherEnemy != null && otherEnemy._state == State.Normal)
             {
                 var speed = collision.relativeVelocity.magnitude;
                 if (speed >= KillSpeedThreshold)
                 {
-                    otherEnemy.Kill(EnemyClearCause.SnowballImpact);
-                    if (GameManager.Instance != null)
-                    {
-                        GameManager.Instance.OnEnemyCleared(otherEnemy.transform.position, EnemyClearCause.SnowballImpact);
-                    }
+                    otherEnemy.Kill(EnemyClearCause.SnowballImpact, null);
                 }
 
                 return;
@@ -346,6 +442,46 @@ namespace Snow2.Enemies
             }
         }
 
+        private void TryBounceFromPlayer(Collision2D collision)
+        {
+            if (_rb == null)
+            {
+                return;
+            }
+            if (Time.time < _nextPlayerBumpAt)
+            {
+                return;
+            }
+            if (collision.contactCount <= 0)
+            {
+                return;
+            }
+
+            // 以敌人当前“意图速度”（巡逻 + 既有外力）作为入射速度。
+            var incident = new Vector2(_dir * PatrolSpeed + _playerBumpVelocity.x, _playerBumpVelocity.y);
+            if (incident.sqrMagnitude < 0.0001f)
+            {
+                // 兜底：把相对速度反向，近似当作“自己撞上去的速度”。
+                incident = -collision.relativeVelocity;
+            }
+
+            var n = collision.GetContact(0).normal;
+            if (Vector2.Dot(incident, n) > 0f)
+            {
+                n = -n;
+            }
+
+            var reflected = Vector2.Reflect(incident, n);
+            var speed = Mathf.Max(Mathf.Max(0f, PlayerBumpMinSpeed), incident.magnitude) * Mathf.Max(0f, PlayerBumpBounceMultiplier);
+            if (reflected.sqrMagnitude < 0.0001f)
+            {
+                reflected = n;
+            }
+
+            _playerBumpVelocity = reflected.normalized * speed;
+            _nextPlayerBumpAt = Time.time + Mathf.Max(0f, PlayerBumpCooldownSeconds);
+        }
+
         private static Vector2 GetVelocity(Rigidbody2D rb)
         {
 #if UNITY_6000_0_OR_NEWER
@@ -364,7 +500,7 @@ namespace Snow2.Enemies
 #endif
         }
 
-        private void Kill(EnemyClearCause cause)
+        public void Kill(EnemyClearCause cause, Snowball sourceSnowball)
         {
             if (_state == State.Dead)
             {
@@ -374,12 +510,54 @@ namespace Snow2.Enemies
 
             if (GameManager.Instance != null)
             {
+                GameManager.Instance.OnEnemyCleared(transform.position, cause, sourceSnowball);
                 GameManager.Instance.UnregisterEnemy(gameObject);
             }
 
             _registered = false;
 
             Destroy(gameObject);
+        }
+
+        public void AbsorbIntoSnowball(Snowball sourceSnowball, Transform snowballTransform)
+        {
+            if (_state == State.Dead)
+            {
+                return;
+            }
+
+            _state = State.Dead;
+
+            if (GameManager.Instance != null)
+            {
+                GameManager.Instance.OnEnemyCleared(transform.position, EnemyClearCause.SnowballImpact, sourceSnowball);
+                GameManager.Instance.UnregisterEnemy(gameObject);
+            }
+
+            _registered = false;
+
+            // 卷入雪球：禁用碰撞/刚体模拟/AI，让其跟随雪球移动。
+            if (_box != null) _box.enabled = false;
+            if (_circle != null) _circle.enabled = false;
+            if (_bodyCol != null) _bodyCol.enabled = false;
+            if (_rb != null) _rb.simulated = false;
+
+            var sr = _sr;
+            if (sr != null)
+            {
+                sr.color = new Color(0.8f, 0.9f, 1f, 0.65f);
+                sr.sortingOrder = sr.sortingOrder - 1;
+            }
+
+            if (snowballTransform != null)
+            {
+                transform.SetParent(snowballTransform, worldPositionStays: true);
+                // 轻微偏移，让“卷入雪球内部”更明显。
+                transform.localPosition = new Vector3(UnityEngine.Random.Range(-0.08f, 0.08f), UnityEngine.Random.Range(-0.08f, 0.08f), 0f);
+                transform.localScale = transform.localScale * 0.65f;
+            }
+
+            enabled = false;
         }
 
         private void OnDestroy()

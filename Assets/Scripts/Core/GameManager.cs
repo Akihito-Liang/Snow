@@ -25,6 +25,14 @@ namespace Snow2
         private float _comboExpireAt;
         private int _clearedSinceComboStart;
 
+        // Perfect Clear：同一个雪球清掉所有敌人
+        private Snowball _perfectClearCandidate;
+        private int _clearedByPerfectClearCandidate;
+
+        // 雪球连击文案（用于屏幕提示）
+        private int _lastSnowballComboCount;
+        private float _snowballComboTextExpireAt;
+
         [Header("Combo")]
         public float ComboWindowSeconds = 2.0f;
 
@@ -47,6 +55,24 @@ namespace Snow2
             }
 
             Instance = this;
+
+            // 运行时兜底：确保奖励系统存在（未在场景中挂载时也能工作）。
+            if (GetComponent<RewardSystem>() == null)
+            {
+                gameObject.AddComponent<RewardSystem>();
+            }
+        }
+
+        private void OnEnable()
+        {
+            Snowball.RollStarted += OnSnowballRollStarted;
+            Snowball.ComboChanged += OnSnowballComboChanged;
+        }
+
+        private void OnDisable()
+        {
+            Snowball.RollStarted -= OnSnowballRollStarted;
+            Snowball.ComboChanged -= OnSnowballComboChanged;
         }
 
         private IEnumerator Start()
@@ -129,9 +155,9 @@ namespace Snow2
 
             if (_aliveEnemyIds.Count == 0)
             {
-                // “一次性清版”判定：在同一连击窗口内清掉所有初始敌人。
-                var clearedAllInOneCombo = (_initialEnemyCount > 0) && (_clearedSinceComboStart >= _initialEnemyCount);
-                if (clearedAllInOneCombo)
+                // Perfect Clear：同一个雪球清掉所有初始敌人。
+                var clearedAllByOneSnowball = (_perfectClearCandidate != null) && (_initialEnemyCount > 0) && (_clearedByPerfectClearCandidate >= _initialEnemyCount);
+                if (clearedAllByOneSnowball)
                 {
                     StartCoroutine(SushiRain());
                 }
@@ -142,12 +168,50 @@ namespace Snow2
 
         public void OnEnemyCleared(Vector2 position, EnemyClearCause cause)
         {
+            OnEnemyCleared(position, cause, null);
+        }
+
+        public void OnEnemyCleared(Vector2 position, EnemyClearCause cause, Snowball sourceSnowball)
+        {
             if (cause == EnemyClearCause.SnowballImpact)
             {
                 AdvanceCombo();
                 _clearedSinceComboStart++;
                 AddScore(BaseSnowballKillScore * Mathf.Max(1, Combo));
-                SpawnKillDrop(position);
+
+                // Perfect Clear 只认同一个雪球：一旦出现“非候选雪球”的击杀，就直接失效。
+                if (_perfectClearCandidate != null)
+                {
+                    if (sourceSnowball != null && sourceSnowball == _perfectClearCandidate)
+                    {
+                        _clearedByPerfectClearCandidate++;
+                    }
+                    else
+                    {
+                        _perfectClearCandidate = null;
+                    }
+                }
+            }
+            else
+            {
+                // 其他方式清敌：不满足“同一雪球清版”。
+                _perfectClearCandidate = null;
+            }
+        }
+
+        private void OnSnowballRollStarted(Snowball snowball)
+        {
+            _perfectClearCandidate = snowball;
+            _clearedByPerfectClearCandidate = 0;
+            _lastSnowballComboCount = 0;
+        }
+
+        private void OnSnowballComboChanged(Snowball snowball, int comboCount)
+        {
+            _lastSnowballComboCount = Mathf.Max(0, comboCount);
+            if (_lastSnowballComboCount > 0)
+            {
+                _snowballComboTextExpireAt = Time.time + 1.0f;
             }
         }
 
@@ -261,6 +325,17 @@ namespace Snow2
             GUI.Label(new Rect(10, 60, 480, 30), $"Potions: {Potions}", style);
             GUI.Label(new Rect(10, 85, 480, 30), $"Enemies Left: {AliveEnemyCount}", style);
             GUI.Label(new Rect(10, 110, 720, 30), "操作：A/D 移动，Space 跳跃，鼠标左键/ J 发射雪球", style);
+
+            // 雪球连击提示（独立于全局 Combo，按本次雪球滚动计数）
+            if (_lastSnowballComboCount > 0 && Time.time <= _snowballComboTextExpireAt)
+            {
+                var big = new GUIStyle(GUI.skin.label)
+                {
+                    fontSize = 34,
+                    alignment = TextAnchor.MiddleCenter
+                };
+                GUI.Label(new Rect(0, 140, Screen.width, 50), $"Combo x{_lastSnowballComboCount}", big);
+            }
         }
     }
 }

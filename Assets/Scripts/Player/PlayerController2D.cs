@@ -27,6 +27,16 @@ namespace Snow2.Player
         [Min(0f)]
         public float GravityScale = 3f;
 
+        [Header("Bump Bounce (Enemy)")]
+        [Min(0f)]
+        public float EnemyBumpBounceMultiplier = 1.0f;
+        [Min(0f)]
+        public float EnemyBumpMinSpeed = 6f;
+        [Min(0f)]
+        public float EnemyBumpDamping = 10f;
+        [Min(0f)]
+        public float EnemyBumpCooldownSeconds = 0.08f;
+
         [Header("Debug (Snow2DBG2)")]
         public bool DebugLogs2;
         [Min(0.05f)]
@@ -42,6 +52,9 @@ namespace Snow2.Player
         private float _jumpBlockLoggedUntil;
 
         private float _verticalVelocity;
+
+        private Vector2 _enemyBumpVelocity;
+        private float _nextEnemyBumpAt;
 
         private readonly ContactPoint2D[] _contacts = new ContactPoint2D[16];
         private int _lastContactCount;
@@ -188,6 +201,17 @@ namespace Snow2.Player
                 return;
             }
 
+            // 外力/反弹速度逐步衰减（用于玩家与敌人接触时的“弹开”）。
+            if (_enemyBumpVelocity.sqrMagnitude > 0.0001f)
+            {
+                var k = 1f - Mathf.Exp(-Mathf.Max(0f, EnemyBumpDamping) * Time.fixedDeltaTime);
+                _enemyBumpVelocity = Vector2.Lerp(_enemyBumpVelocity, Vector2.zero, k);
+            }
+            else
+            {
+                _enemyBumpVelocity = Vector2.zero;
+            }
+
             UpdateGroundedFromContacts();
 
             if (_grounded)
@@ -229,8 +253,8 @@ namespace Snow2.Player
 
             // 自定义速度 -> 位移，并用 MovePosition 推进
             var rbPos = _rb.position;
-            rbPos.x += _moveX * MoveSpeed * Time.fixedDeltaTime;
-            rbPos.y += _verticalVelocity * Time.fixedDeltaTime;
+            rbPos.x += (_moveX * MoveSpeed + _enemyBumpVelocity.x) * Time.fixedDeltaTime;
+            rbPos.y += (_verticalVelocity + _enemyBumpVelocity.y) * Time.fixedDeltaTime;
             _rb.MovePosition(rbPos);
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
@@ -310,10 +334,19 @@ namespace Snow2.Player
             {
                 return;
             }
-            if (collision.collider.GetComponent<EnemyController>() != null)
+
+            // 与敌人接触：按“入射速度”做反弹，避免持续挤压导致双方卡死。
+            var enemy = collision.collider.GetComponent<EnemyController>();
+            if (enemy != null)
             {
+                // Frozen 敌人会变成“可推动雪球”，不要把玩家弹开，否则无法推进。
+                if (!enemy.IsFrozen)
+                {
+                    TryBounceFromEnemy(collision);
+                }
                 return;
             }
+
             for (var i = 0; i < collision.contactCount; i++)
             {
                 var n = collision.GetContact(i).normal;
@@ -323,6 +356,68 @@ namespace Snow2.Player
                     return;
                 }
             }
+        }
+
+        private void OnCollisionEnter2D(Collision2D collision)
+        {
+            if (collision == null || collision.collider == null)
+            {
+                return;
+            }
+
+            // 首次触碰敌人时立刻弹开。
+            var enemy = collision.collider.GetComponent<EnemyController>();
+            if (enemy != null)
+            {
+                if (!enemy.IsFrozen)
+                {
+                    TryBounceFromEnemy(collision);
+                }
+            }
+        }
+
+        private void TryBounceFromEnemy(Collision2D collision)
+        {
+            if (_rb == null)
+            {
+                return;
+            }
+            if (Time.time < _nextEnemyBumpAt)
+            {
+                return;
+            }
+            if (collision.contactCount <= 0)
+            {
+                return;
+            }
+
+            // 以“玩家当前意图速度”（水平输入 + 自定义竖直速度 + 既有外力）作为入射速度。
+            var incident = new Vector2(_moveX * MoveSpeed + _enemyBumpVelocity.x, _verticalVelocity + _enemyBumpVelocity.y);
+            if (incident.sqrMagnitude < 0.0001f)
+            {
+                // 兜底：如果输入/自定义速度很小，就用物理解算的相对速度。
+                incident = collision.relativeVelocity;
+            }
+
+            // 法线方向需“迎着入射速度”，否则反射方向会出错。
+            var n = collision.GetContact(0).normal;
+            if (Vector2.Dot(incident, n) > 0f)
+            {
+                n = -n;
+            }
+
+            var reflected = Vector2.Reflect(incident, n);
+            var speed = Mathf.Max(Mathf.Max(0f, EnemyBumpMinSpeed), incident.magnitude) * Mathf.Max(0f, EnemyBumpBounceMultiplier);
+            if (reflected.sqrMagnitude < 0.0001f)
+            {
+                // 极端情况下 Reflect 结果接近 0，就直接沿法线弹开。
+                reflected = n;
+            }
+
+            _enemyBumpVelocity = reflected.normalized * speed;
+            _verticalVelocity = 0f; // 避免自定义重力在下一帧立刻把反弹抵消成“继续往下挤”。
+            _grounded = false;
+            _nextEnemyBumpAt = Time.time + Mathf.Max(0f, EnemyBumpCooldownSeconds);
         }
 
         private void OnCollisionExit2D(Collision2D collision)
