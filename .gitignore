@@ -1,0 +1,85 @@
+# ===========================
+# Unity 生成目录
+# ===========================
+/[Ll]ibrary/
+/[Tt]emp/
+/[Oo]bj/
+/[Bb]uild/
+/[Bb]uilds/
+/[Ll]ogs/
+/[Uu]ser[Ss]ettings/
+
+# ===========================
+# Memory Map & Crash Reports
+# ===========================
+/[Mm]emoryCaptures/
+/[Rr]ecordings/
+sysinfo.txt
+crashlytics-build.properties
+
+# ===========================
+# Asset Import 缓存
+# ===========================
+/[Aa]ssets/AssetStoreTools*
+/[Aa]ssets/Plugins/Editor/JetBrains*
+
+# ===========================
+# IDE / 编辑器配置
+# ===========================
+# Visual Studio
+.vs/
+*.csproj
+*.sln
+*.suo
+*.tmp
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+
+# JetBrains Rider
+.idea/
+*.iml
+
+# VS Code
+.vscode/
+
+# ===========================
+# OS 生成文件
+# ===========================
+.DS_Store
+.DS_Store?
+Thumbs.db
+Desktop.ini
+
+# ===========================
+# Gradle (Android Build)
+# ===========================
+ExportedObj/
+*.unitypackage
+*.apk
+*.aab
+
+# ===========================
+# Addressables（如果你用了）
+# ===========================
+/[Aa]ssets/[Aa]ddressable[Aa]ssets[Dd]ata/*/*.bin*
+/[Aa]ssets/[Ss]treamingAssets/aa.meta
+/[Aa]ssets/[Ss]treamingAssets/aa/*
+
+# ===========================
+# TextMeshPro（首次导入会自动生成）
+# ===========================
+/[Aa]ssets/TextMesh Pro/
+
+# ===========================
+# NuGet
+# ===========================
+/[Pp]ackages/
+!/[Pp]ackages/manifest.json
+!/[Pp]ackages/packages-lock.json
