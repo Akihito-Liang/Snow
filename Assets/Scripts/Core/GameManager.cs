@@ -2,6 +2,7 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using Snow2.Rewards;
+using Snow2.Player;
 
 namespace Snow2
 {
@@ -38,12 +39,13 @@ namespace Snow2
 
         [Header("Reward")]
         public int BaseSnowballKillScore = 50;
-        public float PotionDropChance = 0.2f;
 
         [Header("Sushi Rain")]
         public float SushiRainDurationSeconds = 3.0f;
         public float SushiRainRatePerSecond = 30f;
         public int SushiScore = 10;
+
+        private PlayerController2D _hudPlayer;
 
 
         private void Awake()
@@ -240,32 +242,6 @@ namespace Snow2
             _comboExpireAt = now + ComboWindowSeconds;
         }
 
-        private void SpawnKillDrop(Vector2 position)
-        {
-            var type = (Random.value < PotionDropChance) ? PickupType.Potion : PickupType.Sushi;
-            var go = new GameObject(type == PickupType.Sushi ? "Pickup_Sushi" : "Pickup_Potion");
-            go.transform.position = position + new Vector2(0, 0.6f);
-            go.transform.localScale = Vector3.one * 0.5f;
-
-            var sr = go.AddComponent<SpriteRenderer>();
-            sr.sprite = RuntimeSpriteLibrary.WhiteSprite;
-            sr.color = type == PickupType.Sushi ? new Color(1f, 0.85f, 0.1f) : new Color(0.2f, 0.9f, 0.35f);
-            sr.sortingOrder = 20;
-
-            var rb = go.AddComponent<Rigidbody2D>();
-            rb.gravityScale = 2f;
-            rb.collisionDetectionMode = CollisionDetectionMode2D.Continuous;
-
-            var col = go.AddComponent<CircleCollider2D>();
-            col.isTrigger = true;
-            col.radius = 0.5f;
-
-            var pickup = go.AddComponent<PickupItem>();
-            pickup.Type = type;
-            pickup.SushiScore = SushiScore;
-            pickup.DespawnY = -12f;
-        }
-
         private IEnumerator SushiRain()
         {
             var cam = UnityEngine.Camera.main;
@@ -336,6 +312,49 @@ namespace Snow2
                 };
                 GUI.Label(new Rect(0, 140, Screen.width, 50), $"Combo x{_lastSnowballComboCount}", big);
             }
+
+            // 右上角：药水倒计时（每种药水独立）
+            if (_hudPlayer == null)
+            {
+                _hudPlayer = FindAnyObjectByType<PlayerController2D>();
+            }
+            if (_hudPlayer != null)
+            {
+                DrawPotionCountdownHUD(_hudPlayer);
+            }
+        }
+
+        private static void DrawPotionCountdownHUD(PlayerController2D player)
+        {
+            var rightStyle = new GUIStyle(GUI.skin.label)
+            {
+                fontSize = 16,
+                alignment = TextAnchor.UpperRight
+            };
+
+            const float width = 260f;
+            const float lineH = 22f;
+            var x = Screen.width - 10f - width;
+            var y = 10f;
+
+            // 仅当有任意药水在生效时才显示
+            var r = player.GetPotionRemainingSeconds(PlayerController2D.PotionType.Red);
+            var b = player.GetPotionRemainingSeconds(PlayerController2D.PotionType.Blue);
+            var yel = player.GetPotionRemainingSeconds(PlayerController2D.PotionType.Yellow);
+            var g = player.GetPotionRemainingSeconds(PlayerController2D.PotionType.Green);
+
+            if (r <= 0.0001f && b <= 0.0001f && yel <= 0.0001f && g <= 0.0001f)
+            {
+                return;
+            }
+
+            GUI.Label(new Rect(x, y, width, lineH), "药水倒计时", rightStyle);
+            y += lineH;
+
+            if (r > 0.0001f) { GUI.Label(new Rect(x, y, width, lineH), $"红药水：{r:0.0}s", rightStyle); y += lineH; }
+            if (b > 0.0001f) { GUI.Label(new Rect(x, y, width, lineH), $"蓝药水：{b:0.0}s", rightStyle); y += lineH; }
+            if (yel > 0.0001f) { GUI.Label(new Rect(x, y, width, lineH), $"黄药水：{yel:0.0}s", rightStyle); y += lineH; }
+            if (g > 0.0001f) { GUI.Label(new Rect(x, y, width, lineH), $"绿药水：{g:0.0}s", rightStyle); }
         }
     }
 }

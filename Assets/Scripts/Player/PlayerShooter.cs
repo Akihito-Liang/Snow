@@ -11,6 +11,7 @@ namespace Snow2.Player
     {
         public float ProjectileSpeed = 16f;
         public float FireCooldownSeconds = 0.22f;
+        public float ProjectileLifetimeSeconds = 2.0f;
 
         private PlayerController2D _player;
         private float _nextFireAt;
@@ -92,14 +93,18 @@ namespace Snow2.Player
 
         private void SpawnProjectile(Vector2 dir)
         {
+            var power = _player != null ? _player.SnowballPowerMultiplier : 1f;
+            var range = _player != null ? _player.RangeMultiplier : 1f;
+
             var go = new GameObject("SnowballProjectile");
             go.transform.position = transform.position + (Vector3)(dir * 0.8f);
-            go.transform.localScale = Vector3.one * 0.3f;
+            go.transform.localScale = Vector3.one * (0.3f * Mathf.Clamp(power, 0.2f, 3.0f));
 
             var sr = go.AddComponent<SpriteRenderer>();
-            sr.sprite = RuntimeSpriteLibrary.WhiteSprite;
+            sr.sprite = RuntimeSpriteLibrary.WhiteSprite != null ? RuntimeSpriteLibrary.WhiteSprite : RuntimeSpriteLibrary.CircleSprite;
             sr.color = Color.white;
-            sr.sortingOrder = 30;
+            // 保证投射物不会被玩家/敌人遮挡（吃药水变大或改排序时也能看见）
+            sr.sortingOrder = 80;
 
             var rb = go.AddComponent<Rigidbody2D>();
             rb.gravityScale = 0f;
@@ -108,11 +113,11 @@ namespace Snow2.Player
 
             var col = go.AddComponent<CircleCollider2D>();
             col.isTrigger = true;
-            col.radius = 0.5f;
+            col.radius = 0.5f * Mathf.Clamp(power, 0.2f, 3.0f);
 
             var proj = go.AddComponent<SnowballProjectile>();
-            proj.LifetimeSeconds = 2.0f;
-            proj.Speed = ProjectileSpeed;
+            proj.LifetimeSeconds = Mathf.Max(0.1f, ProjectileLifetimeSeconds * Mathf.Clamp(range, 0.2f, 5.0f));
+            proj.Speed = ProjectileSpeed * Mathf.Clamp(range, 0.2f, 5.0f);
             proj.Direction = dir;
         }
     }

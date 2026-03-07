@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
 using UnityEngine;
 #if ENABLE_INPUT_SYSTEM
 using UnityEngine.InputSystem;
@@ -58,6 +59,12 @@ namespace Snow2
         [Header("Despawn")]
         [SerializeField] private float despawnY = -12f;
         [SerializeField, Min(0f)] private float despawnViewportMargin = 0.25f;
+
+        [Header("Debug (Snow2Bounce)")]
+        // 仅用于排查：默认关闭，避免刷屏。
+        [SerializeField] private bool bounceDebugLogs;
+        [SerializeField, Min(0f)] private float bounceDebugCooldownSeconds = 0.05f;
+        private float _nextBounceDebugAt;
 
         private Rigidbody2D _rb;
         private Collider2D _solidCol;
@@ -355,6 +362,23 @@ namespace Snow2
                 return false;
             }
 
+            // 说明：这里不要用“每次 BounceDbg() 打一行”的方式。
+            // 我们有 cooldown（防刷屏），如果第一行打完就进入冷却，后续关键日志会丢失。
+            // 因此：单次碰撞收集信息，最后汇总输出 1 行。
+            var sb = default(StringBuilder);
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            var doLog = bounceDebugLogs && (Time.unscaledTime >= _nextBounceDebugAt);
+            if (doLog)
+            {
+                sb = new StringBuilder(512);
+                var v0 = GetVelocity(_rb);
+                sb.Append($"name={name} other={collision.collider.name} otherTrig={collision.collider.isTrigger} contacts={collision.contactCount}");
+                sb.Append($" rbV0=({v0.x:0.###},{v0.y:0.###}) relV=({collision.relativeVelocity.x:0.###},{collision.relativeVelocity.y:0.###})");
+                sb.Append($" thrNx={Mathf.Clamp01(wallNormalXThreshold):0.###} damping={Mathf.Clamp01(wallBounceDamping):0.###}");
+                sb.Append($" runActive={_runActive} rolling={_rolling} wallBounces={_wallBounceCount}");
+            }
+#endif
+
             // 只在“左右墙面”反弹：法线 x 分量足够大。
             var hitWall = false;
             var n = Vector2.zero;
@@ -370,25 +394,103 @@ namespace Snow2
             }
             if (!hitWall)
             {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                if (sb != null)
+                {
+                    sb.Append(" | hitWall=false normals=");
+                    for (var i = 0; i < collision.contactCount; i++)
+                    {
+                        var c = collision.GetContact(i);
+                        sb.Append($"[{i}]n=({c.normal.x:0.###},{c.normal.y:0.###})sep={c.separation:0.###}p=({c.point.x:0.###},{c.point.y:0.###}) ");
+                    }
+
+                    Debug.Log($"[Snow2Bounce] {sb}", this);
+                    _nextBounceDebugAt = Time.unscaledTime + Mathf.Max(0f, bounceDebugCooldownSeconds);
+                }
+#endif
                 return false;
             }
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            if (sb != null)
+            {
+                sb.Append($" | hitWall=true n0=({n.x:0.###},{n.y:0.###})");
+            }
+#endif
 
             // 忽略敌人本体（避免同化/击杀逻辑与反弹互相打架）
             if (collision.collider != null && collision.collider.GetComponentInParent<EnemyController>() != null)
             {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                if (sb != null)
+                {
+                    sb.Append(" | ignoreReason=enemyCollider");
+                    Debug.Log($"[Snow2Bounce] {sb}", this);
+                    _nextBounceDebugAt = Time.unscaledTime + Mathf.Max(0f, bounceDebugCooldownSeconds);
+                }
+#endif
                 return false;
             }
 
-            var v = GetVelocity(_rb);
-            var reflected = Vector2.Reflect(v, n) * Mathf.Clamp01(wallBounceDamping);
-
-            // 避免反弹后速度过小导致“贴墙停住”。
-            if (reflected.sqrMagnitude < 0.01f && v.sqrMagnitude > 0.01f)
+            // 关键修复：用“入射速度”而不是当前 rb 速度。
+            // Unity 的 2D 物理解算有时会在回调触发前把 rb 速度解算成接近 0，
+            // 此时直接 Reflect(rb.velocity) 会导致“撞墙后停住”。
+            // 入射速度优先用 rb 当前速度；如果它已被物理解算“清零”，再回退用 relativeVelocity。
+            // 注意：对静态墙来说，relativeVelocity 近似等于 (other - self) = -selfVel，所以需要取反。
+            var rbV = GetVelocity(_rb);
+            var incident = rbV;
+            var usedRelative = false;
+            if (incident.sqrMagnitude < 0.0004f)
             {
-                reflected = v * -Mathf.Clamp01(wallBounceDamping);
+                usedRelative = true;
+                incident = -collision.relativeVelocity;
             }
 
+            // 确保法线朝向正确：incident 应该指向墙面（与法线点积为负）。
+            if (Vector2.Dot(incident, n) > 0f)
+            {
+                n = -n;
+            }
+
+            var damping = Mathf.Clamp01(wallBounceDamping);
+            var reflected = Vector2.Reflect(incident, n) * damping;
+
+            // 避免反弹后速度过小导致“贴墙停住”。
+            // 若 Reflect 结果太小，则退化为“仅翻转 X 速度”的墙面反弹。
+            if (reflected.sqrMagnitude < 0.01f && incident.sqrMagnitude > 0.01f)
+            {
+                reflected = incident;
+                reflected.x = -reflected.x;
+                reflected *= damping;
+            }
+
+            // 最终兜底：如果仍然太小，给一个最小水平反弹速度（保留原有 y 方向）。
+            if (reflected.sqrMagnitude < 0.01f && incident.sqrMagnitude > 0.01f)
+            {
+                var minSpeed = Mathf.Max(1.5f, incident.magnitude * 0.35f);
+                var dirX = -Mathf.Sign(Mathf.Abs(incident.x) > 0.01f ? incident.x : n.x);
+                reflected = new Vector2(dirX * minSpeed, incident.y * damping);
+            }
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            if (sb != null)
+            {
+                sb.Append($" | rbV=({rbV.x:0.###},{rbV.y:0.###})");
+                sb.Append($" incident=({incident.x:0.###},{incident.y:0.###}) usedRel={usedRelative}");
+                sb.Append($" n=({n.x:0.###},{n.y:0.###}) dot={Vector2.Dot(incident, n):0.###}");
+                sb.Append($" reflected=({reflected.x:0.###},{reflected.y:0.###}) countBounce={countBounce}");
+            }
+#endif
+
             SetVelocity(_rb, reflected);
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            if (sb != null)
+            {
+                var vAfter = GetVelocity(_rb);
+                sb.Append($" | rbVAfter=({vAfter.x:0.###},{vAfter.y:0.###})");
+            }
+#endif
 
             if (countBounce)
             {
@@ -398,6 +500,14 @@ namespace Snow2
                     BreakAndDestroy();
                 }
             }
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            if (sb != null)
+            {
+                Debug.Log($"[Snow2Bounce] {sb}", this);
+                _nextBounceDebugAt = Time.unscaledTime + Mathf.Max(0f, bounceDebugCooldownSeconds);
+            }
+#endif
 
             return true;
         }

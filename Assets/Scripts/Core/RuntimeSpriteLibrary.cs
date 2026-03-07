@@ -6,6 +6,7 @@ namespace Snow2
     {
         private static Sprite _block;
         private static Sprite _circle;
+        private static Sprite _triangle;
 
         // 原型阶段：优先从 Resources 加载素材；必要时允许运行时生成（例如圆形雪球）。
         public static Sprite WhiteSprite
@@ -65,6 +66,74 @@ namespace Snow2
                 _circle = Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), pixelsPerUnit: 64f);
                 return _circle;
             }
+        }
+
+        public static Sprite TriangleSprite
+        {
+            get
+            {
+                if (_triangle != null)
+                {
+                    return _triangle;
+                }
+
+                // 生成一个透明背景的白色三角形 Sprite（用于药水/道具占位外观）。
+                // 为避免额外资源文件，本项目在运行时生成。
+                const int size = 64;
+                var tex = new Texture2D(size, size, TextureFormat.RGBA32, mipChain: false)
+                {
+                    filterMode = FilterMode.Bilinear,
+                    wrapMode = TextureWrapMode.Clamp
+                };
+
+                // 等腰三角形顶点（纹理像素坐标）
+                var a = new Vector2(size * 0.5f, size - 4f);
+                var b = new Vector2(6f, 8f);
+                var c = new Vector2(size - 6f, 8f);
+
+                var pixels = new Color32[size * size];
+                for (var y = 0; y < size; y++)
+                {
+                    for (var x = 0; x < size; x++)
+                    {
+                        var p = new Vector2(x + 0.5f, y + 0.5f);
+                        var inside = PointInTriangle(p, a, b, c);
+                        var idx = y * size + x;
+                        pixels[idx] = inside ? new Color(1f, 1f, 1f, 1f) : new Color(1f, 1f, 1f, 0f);
+                    }
+                }
+
+                tex.SetPixels32(pixels);
+                tex.Apply(updateMipmaps: false, makeNoLongerReadable: true);
+
+                _triangle = Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), pixelsPerUnit: 64f);
+                return _triangle;
+            }
+        }
+
+        private static bool PointInTriangle(Vector2 p, Vector2 a, Vector2 b, Vector2 c)
+        {
+            // 叉乘同向法判断点在三角形内（含边界）
+            var ab = b - a;
+            var bc = c - b;
+            var ca = a - c;
+
+            var ap = p - a;
+            var bp = p - b;
+            var cp = p - c;
+
+            var c1 = Cross(ab, ap);
+            var c2 = Cross(bc, bp);
+            var c3 = Cross(ca, cp);
+
+            var hasNeg = (c1 < 0f) || (c2 < 0f) || (c3 < 0f);
+            var hasPos = (c1 > 0f) || (c2 > 0f) || (c3 > 0f);
+            return !(hasNeg && hasPos);
+        }
+
+        private static float Cross(Vector2 a, Vector2 b)
+        {
+            return a.x * b.y - a.y * b.x;
         }
     }
 }

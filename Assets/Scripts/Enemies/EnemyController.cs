@@ -1,6 +1,9 @@
 using UnityEngine;
 using Snow2;
 using Snow2.Player;
+using Snow2.PowerUps;
+using Snow2.Rewards;
+using Snow2.Balance;
 
 namespace Snow2.Enemies
 {
@@ -31,6 +34,8 @@ namespace Snow2.Enemies
         [Min(0f)]
         public float PlayerBumpCooldownSeconds = 0.08f;
 
+        // 数值集中在 Snow2.Balance.EnemyDropBalance
+
         private enum State
         {
             Normal,
@@ -57,7 +62,16 @@ namespace Snow2.Enemies
 
         private Collider2D _bodyCol;
 
-        [Header("Debug (Snow2DBG2)")]
+        // Custom gravity (match PlayerController2D)
+        private float _verticalVelocity;
+        private bool _grounded;
+        private float _gravityScale = 3f;
+        private readonly ContactPoint2D[] _contacts = new ContactPoint2D[16];
+
+        private bool _deathDropDone;
+
+        // 旧调试日志（Snow2DBG2）已停用：如需排查请在对应模块打开新的专用日志开关。
+        [Header("Debug (Snow2DBG2) (Deprecated)")]
         public bool DebugLogs2;
         [Min(0.05f)]
         public float DebugLogIntervalSeconds2 = 0.8f;
@@ -83,6 +97,16 @@ namespace Snow2.Enemies
                 _rb.simulated = true;
                 _rb.bodyType = RigidbodyType2D.Dynamic;
                 _rb.freezeRotation = true;
+
+                // 与玩家一致：使用自定义重力（见 FixedUpdate），避免 MovePosition 影响 Unity 2D 重力积分。
+                _rb.gravityScale = 0f;
+            }
+
+            // 优先用 Box（Normal 状态），否则用 Circle（Frozen 状态）
+            _bodyCol = _box != null ? (Collider2D)_box : (Collider2D)_circle;
+            if (_bodyCol == null)
+            {
+                _bodyCol = GetComponent<Collider2D>();
             }
 
             // Enemy 由运行时创建时，Start 可能晚于关卡初始化结算；
@@ -107,6 +131,15 @@ namespace Snow2.Enemies
             {
                 _bodyCol = GetComponent<Collider2D>();
             }
+
+            // 重力倍率与玩家保持一致（若玩家不存在则用默认值）
+            var player = FindAnyObjectByType<PlayerController2D>();
+            if (player != null)
+            {
+                _gravityScale = Mathf.Max(0f, player.GravityScale);
+            }
+
+            // 奖励/药水不会提前展示，统一在死亡瞬间随机生成并掉落。
         }
 
         private void TryRegister()
@@ -145,6 +178,15 @@ namespace Snow2.Enemies
                 _playerBumpVelocity = Vector2.zero;
             }
 
+            UpdateGroundedFromContacts();
+            if (_grounded && _verticalVelocity < 0f)
+            {
+                _verticalVelocity = 0f;
+            }
+
+            // 自定义重力积分（与玩家一致）
+            _verticalVelocity += Physics2D.gravity.y * Mathf.Max(0f, _gravityScale) * Time.fixedDeltaTime;
+
             var flipReason = 0; // 0=none 1=wall 2=edge
             if (ShouldFlipByWall()) flipReason = 1;
             else if (ShouldFlipByEdge()) flipReason = 2;
@@ -158,17 +200,10 @@ namespace Snow2.Enemies
             var rbPos = _rb.position;
             var beforeX = rbPos.x;
             rbPos.x += (_dir * PatrolSpeed + _playerBumpVelocity.x) * Time.fixedDeltaTime;
-            rbPos.y += _playerBumpVelocity.y * Time.fixedDeltaTime;
+            rbPos.y += (_verticalVelocity + _playerBumpVelocity.y) * Time.fixedDeltaTime;
             _rb.MovePosition(rbPos);
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-            if (DebugLogs2 && Time.unscaledTime >= _nextDebugAt)
-            {
-                _nextDebugAt = Time.unscaledTime + Mathf.Max(0.05f, DebugLogIntervalSeconds2);
-                var reason = flipReason == 1 ? "wall" : (flipReason == 2 ? "edge" : "-");
-                Debug.Log($"[Snow2DBG2][Enemy] name={name} x={beforeX:0.###}->{rbPos.x:0.###} dir={_dir:0.###} flip={reason} dt={Time.fixedDeltaTime:0.#####}", this);
-            }
-#endif
+            // (旧日志已移除) [Snow2DBG2][Enemy]
         }
 
         private bool ShouldFlipByWall()
@@ -290,6 +325,10 @@ namespace Snow2.Enemies
 
             _state = State.Frozen;
 
+            // 切回真实物理：雪球应受 Unity 2D 重力影响
+            _grounded = false;
+            _verticalVelocity = 0f;
+
             // 冻结后变成“可推动雪球”。
             if (GetComponent<Snowball>() == null)
             {
@@ -305,6 +344,7 @@ namespace Snow2.Enemies
                 _rb.linearDamping = 0.05f;
                 _rb.angularDamping = 0.02f;
                 _rb.mass = 2.0f;
+                _rb.gravityScale = 1f;
             }
 
             if (_box != null)
@@ -315,6 +355,8 @@ namespace Snow2.Enemies
             {
                 _circle.enabled = true;
             }
+
+            _bodyCol = _circle != null ? (Collider2D)_circle : _bodyCol;
 
             // 变成“雪球”后外观为白色
             if (_sr != null)
@@ -384,12 +426,7 @@ namespace Snow2.Enemies
                         {
                             _dir = -_dir;
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-                            if (DebugLogs2)
-                            {
-                                Debug.Log($"[Snow2DBG2][Enemy][BumpFlip] name={name} other={collision.collider.name} nx={n.x:0.###}", this);
-                            }
-#endif
+                            // (旧日志已移除) [Snow2DBG2][Enemy][BumpFlip]
 
                             break;
                         }
@@ -479,7 +516,46 @@ namespace Snow2.Enemies
             }
 
             _playerBumpVelocity = reflected.normalized * speed;
+            _verticalVelocity = 0f;
+            _grounded = false;
             _nextPlayerBumpAt = Time.time + Mathf.Max(0f, PlayerBumpCooldownSeconds);
+        }
+
+        private void UpdateGroundedFromContacts()
+        {
+            if (_bodyCol == null)
+            {
+                _grounded = false;
+                return;
+            }
+
+            _grounded = false;
+            var count = _bodyCol.GetContacts(_contacts);
+            for (var i = 0; i < count; i++)
+            {
+                var c = _contacts[i];
+                if (c.collider == null)
+                {
+                    continue;
+                }
+                if (c.collider.isTrigger)
+                {
+                    continue;
+                }
+                if (c.collider.GetComponent<PlayerController2D>() != null)
+                {
+                    continue;
+                }
+                if (c.collider.GetComponent<EnemyController>() != null)
+                {
+                    continue;
+                }
+                if (c.normal.y >= 0.6f)
+                {
+                    _grounded = true;
+                    return;
+                }
+            }
         }
 
         private static Vector2 GetVelocity(Rigidbody2D rb)
@@ -506,7 +582,16 @@ namespace Snow2.Enemies
             {
                 return;
             }
+
+            Die(cause, sourceSnowball);
+        }
+
+        // 统一“死亡结算”入口：掉落、计分、注销、销毁。
+        private void Die(EnemyClearCause cause, Snowball sourceSnowball)
+        {
             _state = State.Dead;
+
+            TryDropDeathItem();
 
             if (GameManager.Instance != null)
             {
@@ -527,6 +612,9 @@ namespace Snow2.Enemies
             }
 
             _state = State.Dead;
+
+            // 卷入雪球也算被消灭：奖励在“死亡瞬间”原地掉落
+            TryDropDeathItem();
 
             if (GameManager.Instance != null)
             {
@@ -558,6 +646,115 @@ namespace Snow2.Enemies
             }
 
             enabled = false;
+        }
+
+        private void TryDropDeathItem()
+        {
+            if (_deathDropDone)
+            {
+                return;
+            }
+            _deathDropDone = true;
+
+            if (!EnemyDropBalance.EnableDeathDrop)
+            {
+                return;
+            }
+            if (Random.value > Mathf.Clamp01(EnemyDropBalance.DeathDropChance))
+            {
+                return;
+            }
+
+            var pW = Mathf.Max(0f, EnemyDropBalance.PotionWeight);
+            var cW = Mathf.Max(0f, EnemyDropBalance.CakeWeight);
+            var sW = Mathf.Max(0f, EnemyDropBalance.SnackWeight);
+            var sum = pW + cW + sW;
+            if (sum <= 0.0001f)
+            {
+                return;
+            }
+
+            var pos = (Vector2)transform.position + new Vector2(0f, Mathf.Max(0f, EnemyDropBalance.DropYOffset));
+            var roll = Random.value * sum;
+            if (roll < pW)
+            {
+                SpawnRandomPotionAt(pos);
+            }
+            else if (roll < pW + cW)
+            {
+                SpawnScorePickupAt(pos, isCake: true);
+            }
+            else
+            {
+                SpawnScorePickupAt(pos, isCake: false);
+            }
+        }
+
+        private static int GetPickupLayer()
+        {
+            var layer = LayerMask.NameToLayer(EnemyDropBalance.PickupLayerName1);
+            if (layer == -1) layer = LayerMask.NameToLayer(EnemyDropBalance.PickupLayerName2);
+            if (layer == -1) layer = LayerMask.NameToLayer(EnemyDropBalance.PickupLayerName3);
+            // 兜底：用 Unity 内置的 Ignore Raycast 层（一定存在），至少保证和 Default/Enemy 分离。
+            if (layer == -1) layer = EnemyDropBalance.FallbackPickupLayer;
+            return layer;
+        }
+
+        private static void SpawnRandomPotionAt(Vector2 position)
+        {
+            var roll = Random.Range(0, 4);
+            var color = Color.white;
+
+            var go = new GameObject("PowerUp_Potion");
+            go.layer = GetPickupLayer();
+            go.transform.position = position;
+            go.transform.localScale = Vector3.one * EnemyDropBalance.PotionScale;
+
+            var sr = go.AddComponent<SpriteRenderer>();
+            sr.sprite = RuntimeSpriteLibrary.TriangleSprite;
+            sr.sortingOrder = EnemyDropBalance.PotionSortingOrder;
+
+            // 先加物理/碰撞体，再加具体道具脚本（确保 Awake 顺序）
+            go.AddComponent<PowerUpDropBody>();
+
+            switch (roll)
+            {
+                case 0:
+                    go.AddComponent<RedPotion>();
+                    color = PotionBalance.RedColor;
+                    break;
+                case 1:
+                    go.AddComponent<BluePotion>();
+                    color = PotionBalance.BlueColor;
+                    break;
+                case 2:
+                    go.AddComponent<YellowPotion>();
+                    color = PotionBalance.YellowColor;
+                    break;
+                default:
+                    go.AddComponent<GreenPotion>();
+                    color = PotionBalance.GreenColor;
+                    break;
+            }
+            sr.color = color;
+        }
+
+        private void SpawnScorePickupAt(Vector2 position, bool isCake)
+        {
+            var go = new GameObject(isCake ? "Pickup_Cake" : "Pickup_Snack");
+            go.layer = GetPickupLayer();
+            go.transform.position = position;
+            go.transform.localScale = Vector3.one * EnemyDropBalance.CakeSnackScale;
+
+            var sr = go.AddComponent<SpriteRenderer>();
+            sr.sprite = isCake ? RuntimeSpriteLibrary.TriangleSprite : RuntimeSpriteLibrary.CircleSprite;
+            sr.color = isCake ? EnemyDropBalance.CakeColor : EnemyDropBalance.SnackColor;
+            sr.sortingOrder = EnemyDropBalance.RewardSortingOrder;
+
+            var pickup = go.AddComponent<PickupItem>();
+            pickup.Type = isCake ? PickupType.Cake : PickupType.Snack;
+            pickup.RewardScore = isCake ? EnemyDropBalance.CakeScore : EnemyDropBalance.SnackScore;
+            pickup.DespawnY = -12f;
         }
 
         private void OnDestroy()

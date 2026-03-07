@@ -3,6 +3,7 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 #endif
 using Snow2.Enemies;
+using Snow2.Balance;
 
 namespace Snow2.Player
 {
@@ -10,6 +11,14 @@ namespace Snow2.Player
     [RequireComponent(typeof(Collider2D))]
     public sealed class PlayerController2D : MonoBehaviour
     {
+        public enum PotionType
+        {
+            Red = 0,
+            Blue = 1,
+            Yellow = 2,
+            Green = 3,
+        }
+
         public float MoveSpeed = 7f;
         public float JumpImpulse = 11f;
 
@@ -47,6 +56,27 @@ namespace Snow2.Player
         private float _moveX;
         private bool _grounded;
 
+        // Power-Ups
+        private float _baseMoveSpeed;
+        private bool _baseMoveSpeedCaptured;
+        private float _moveSpeedMultiplier = 1f;
+        private float _snowballPowerMultiplier = 1f;
+        private float _rangeMultiplier = 1f;
+
+        // Potion durations/tint
+        private readonly float[] _potionUntil = new float[4];
+        private readonly float[] _potionMultiplier = new float[4];
+        private bool _potionDirty;
+
+        private SpriteRenderer[] _tintRenderers;
+        private Color[] _tintBaseColors;
+        private bool _tintCaptured;
+
+        private bool _giantMode;
+        private float _giantUntil;
+        private Vector3 _baseScale;
+        private bool _baseScaleCaptured;
+
         private float _jumpBufferedUntil;
         private float _lastGroundedAt = -999f;
         private float _jumpBlockLoggedUntil;
@@ -68,10 +98,20 @@ namespace Snow2.Player
 
         public float FacingX { get; private set; } = 1f;
 
+        public float SnowballPowerMultiplier => Mathf.Max(0.05f, _snowballPowerMultiplier);
+        public float RangeMultiplier => Mathf.Max(0.05f, _rangeMultiplier);
+
+        public bool IsGiantMode => _giantMode;
+
         private void Awake()
         {
             _rb = GetComponent<Rigidbody2D>();
             _col = GetComponent<Collider2D>();
+
+            _baseMoveSpeed = MoveSpeed;
+            _baseMoveSpeedCaptured = true;
+            _baseScale = transform.localScale;
+            _baseScaleCaptured = true;
 
             // 运行时兜底：保证玩家是 Dynamic + 可模拟，并锁 Z 旋转。
             // 这样即使场景里 Rigidbody2D 被误改（例如变成 Static/不模拟），也能正常移动。
@@ -84,12 +124,18 @@ namespace Snow2.Player
                 // 使用自定义重力（见 FixedUpdate），避免 MovePosition 影响 Unity 2D 重力积分。
                 _rb.gravityScale = 0f;
             }
+
+            // 捕获玩家所有 SpriteRenderer 的原始颜色，后续做药水 tint 叠加
+            CaptureTintTargetsIfNeeded();
+
+            // 初始化药水倍率（避免第一次取值时出现 0）
+            for (var i = 0; i < _potionMultiplier.Length; i++)
+            {
+                _potionMultiplier[i] = 1f;
+            }
         }
 
-        private void Start()
-        {
-            DebugLogs2 = true;
-        }
+        // 旧调试日志（Snow2DBG2）已停用：如需排查请在对应模块打开新的专用日志开关。
 
 #if ENABLE_INPUT_SYSTEM
         private void OnEnable()
@@ -136,6 +182,15 @@ namespace Snow2.Player
 
         private void Update()
         {
+            // 药水到期：检查并更新衍生属性/颜色
+            UpdatePotionExpirations();
+
+            // Giant Mode 时长处理
+            if (_giantMode && Time.time >= _giantUntil)
+            {
+                DisableGiantMode();
+            }
+
             _moveX = 0f;
 
             float rawMove = 0f;
@@ -180,18 +235,290 @@ namespace Snow2.Player
             {
                 _jumpBufferedUntil = Time.time + Mathf.Max(0f, JumpBufferSeconds);
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-                if (DebugLogs2)
-                {
-                    Debug.Log($"[Snow2DBG2][Player][JumpPress] t={Time.time:0.###} grounded={_grounded} bufferUntil={_jumpBufferedUntil:0.###}", this);
-                }
-#endif
+                // (旧日志已移除) [Snow2DBG2][Player][JumpPress]
             }
 
             if (Mathf.Abs(_moveX) > 0.01f)
             {
                 FacingX = Mathf.Sign(_moveX);
             }
+        }
+
+        public void ApplyPotion(PotionType type, float durationSeconds, float multiplier = 1f)
+        {
+            var idx = (int)type;
+            if (idx < 0 || idx >= _potionUntil.Length)
+            {
+                return;
+            }
+
+            var duration = Mathf.Max(0f, durationSeconds);
+            if (duration <= 0.0001f)
+            {
+                return;
+            }
+
+            // 同类药水：叠加时长（从“剩余时间”往后续）
+            _potionUntil[idx] = Mathf.Max(Time.time, _potionUntil[idx]) + duration;
+
+            // 记录倍率（同类多次拾取时取更强的配置，避免“捡到更弱药水导致降级”）
+            var m = Mathf.Max(0f, multiplier);
+            if (m > 0.0001f)
+            {
+                _potionMultiplier[idx] = Mathf.Max(_potionMultiplier[idx], m);
+            }
+
+            // 绿药水：沿用原有巨大化逻辑，但把时间对齐到同一份 until
+            if (type == PotionType.Green)
+            {
+                EnableGiantMode(_potionUntil[idx] - Time.time);
+                _potionUntil[idx] = _giantUntil;
+            }
+
+            _potionDirty = true;
+            RecalculatePotionDerivedStatsIfNeeded();
+            ApplyPotionTint();
+        }
+
+        public float GetPotionRemainingSeconds(PotionType type)
+        {
+            var idx = (int)type;
+            if (idx < 0 || idx >= _potionUntil.Length)
+            {
+                return 0f;
+            }
+            return Mathf.Max(0f, _potionUntil[idx] - Time.time);
+        }
+
+        public bool IsPotionActive(PotionType type)
+        {
+            return GetPotionRemainingSeconds(type) > 0.0001f;
+        }
+
+        private void UpdatePotionExpirations()
+        {
+            var now = Time.time;
+            var changed = false;
+
+            for (var i = 0; i < _potionUntil.Length; i++)
+            {
+                if (_potionUntil[i] > 0f && now >= _potionUntil[i])
+                {
+                    _potionUntil[i] = 0f;
+                    _potionMultiplier[i] = 1f;
+                    changed = true;
+                }
+            }
+
+            // 绿药水到期由 DisableGiantMode 驱动，这里也把状态对齐一下
+            if (!_giantMode)
+            {
+                var greenIdx = (int)PotionType.Green;
+                if (_potionUntil[greenIdx] > 0f && now >= _potionUntil[greenIdx])
+                {
+                    _potionUntil[greenIdx] = 0f;
+                    changed = true;
+                }
+            }
+            else
+            {
+                _potionUntil[(int)PotionType.Green] = _giantUntil;
+            }
+
+            if (changed)
+            {
+                _potionDirty = true;
+                RecalculatePotionDerivedStatsIfNeeded();
+                ApplyPotionTint();
+            }
+        }
+
+        private void RecalculatePotionDerivedStatsIfNeeded()
+        {
+            if (!_potionDirty)
+            {
+                return;
+            }
+            _potionDirty = false;
+
+            // 速度/威力/射程：按“是否仍在时长内”决定是否生效
+            var speedMult = IsPotionActive(PotionType.Red) ? Mathf.Max(0.05f, _potionMultiplier[(int)PotionType.Red]) : 1f;
+            var powerMult = IsPotionActive(PotionType.Blue) ? Mathf.Max(0.05f, _potionMultiplier[(int)PotionType.Blue]) : 1f;
+            var rangeMult = IsPotionActive(PotionType.Yellow) ? Mathf.Max(0.05f, _potionMultiplier[(int)PotionType.Yellow]) : 1f;
+
+            // MoveSpeed：基于初始值重新计算，避免永久累乘
+            if (_baseMoveSpeedCaptured)
+            {
+                _moveSpeedMultiplier = speedMult;
+                MoveSpeed = Mathf.Max(0.01f, _baseMoveSpeed * _moveSpeedMultiplier);
+            }
+
+            _snowballPowerMultiplier = powerMult;
+            _rangeMultiplier = rangeMult;
+        }
+
+        private void CaptureTintTargetsIfNeeded()
+        {
+            if (_tintCaptured)
+            {
+                return;
+            }
+
+            _tintRenderers = GetComponentsInChildren<SpriteRenderer>(includeInactive: true);
+            if (_tintRenderers == null || _tintRenderers.Length == 0)
+            {
+                _tintCaptured = true;
+                return;
+            }
+
+            _tintBaseColors = new Color[_tintRenderers.Length];
+            for (var i = 0; i < _tintRenderers.Length; i++)
+            {
+                var sr = _tintRenderers[i];
+                _tintBaseColors[i] = sr != null ? sr.color : Color.white;
+            }
+            _tintCaptured = true;
+        }
+
+        private void ApplyPotionTint()
+        {
+            CaptureTintTargetsIfNeeded();
+            if (_tintRenderers == null || _tintBaseColors == null)
+            {
+                return;
+            }
+
+            // 颜色融合：base*(1-w) + Σ(color_i * w_i)，w 过大则归一化
+            var wEach = PotionBalance.PlayerTintWeightEach;
+            var sum = Color.black;
+            var w = 0f;
+
+            if (IsPotionActive(PotionType.Red))
+            {
+                sum += PotionBalance.RedColor * wEach;
+                w += wEach;
+            }
+            if (IsPotionActive(PotionType.Blue))
+            {
+                sum += PotionBalance.BlueColor * wEach;
+                w += wEach;
+            }
+            if (IsPotionActive(PotionType.Yellow))
+            {
+                sum += PotionBalance.YellowColor * wEach;
+                w += wEach;
+            }
+            if (IsPotionActive(PotionType.Green))
+            {
+                sum += PotionBalance.GreenColor * wEach;
+                w += wEach;
+            }
+
+            if (w > 1f)
+            {
+                sum *= (1f / w);
+                w = 1f;
+            }
+
+            for (var i = 0; i < _tintRenderers.Length; i++)
+            {
+                var sr = _tintRenderers[i];
+                if (sr == null)
+                {
+                    continue;
+                }
+
+                var baseCol = _tintBaseColors[i];
+                if (w <= 0.0001f)
+                {
+                    sr.color = baseCol;
+                    continue;
+                }
+
+                var r = baseCol.r * (1f - w) + sum.r;
+                var g = baseCol.g * (1f - w) + sum.g;
+                var b = baseCol.b * (1f - w) + sum.b;
+                sr.color = new Color(r, g, b, baseCol.a);
+            }
+        }
+
+        /// <summary>
+        /// 红药水：提升移动速度。
+        /// </summary>
+        public void IncreaseSpeed(float multiplier)
+        {
+            if (!_baseMoveSpeedCaptured)
+            {
+                _baseMoveSpeed = MoveSpeed;
+                _baseMoveSpeedCaptured = true;
+            }
+
+            var m = Mathf.Max(0f, multiplier);
+            if (m <= 0.0001f)
+            {
+                return;
+            }
+
+            _moveSpeedMultiplier *= m;
+            MoveSpeed = Mathf.Max(0.01f, _baseMoveSpeed * _moveSpeedMultiplier);
+        }
+
+        /// <summary>
+        /// 蓝药水：增强雪球威力（用于影响投射物判定/尺寸/速度等）。
+        /// </summary>
+        public void EnhanceSnowballPower(float multiplier)
+        {
+            var m = Mathf.Max(0f, multiplier);
+            if (m <= 0.0001f)
+            {
+                return;
+            }
+            _snowballPowerMultiplier *= m;
+        }
+
+        /// <summary>
+        /// 黄药水：增加射程（用于影响投射物 lifetime/speed 等）。
+        /// </summary>
+        public void IncreaseRange(float multiplier)
+        {
+            var m = Mathf.Max(0f, multiplier);
+            if (m <= 0.0001f)
+            {
+                return;
+            }
+            _rangeMultiplier *= m;
+        }
+
+        /// <summary>
+        /// 绿药水：巨大化/无敌模式（无视碰撞伤害并可撞死敌人）。
+        /// </summary>
+        public void EnableGiantMode(float duration)
+        {
+            if (!_baseScaleCaptured)
+            {
+                _baseScale = transform.localScale;
+                _baseScaleCaptured = true;
+            }
+
+            _giantMode = true;
+            _giantUntil = Mathf.Max(_giantUntil, Time.time + Mathf.Max(0f, duration));
+            transform.localScale = _baseScale * 1.6f;
+        }
+
+        private void DisableGiantMode()
+        {
+            _giantMode = false;
+            if (_baseScaleCaptured)
+            {
+                transform.localScale = _baseScale;
+            }
+
+            // 绿药水到期：触发一次 UI/颜色刷新
+            _potionUntil[(int)PotionType.Green] = 0f;
+            _potionMultiplier[(int)PotionType.Green] = 1f;
+            _potionDirty = true;
+            RecalculatePotionDerivedStatsIfNeeded();
+            ApplyPotionTint();
         }
 
         private void FixedUpdate()
@@ -231,25 +558,13 @@ namespace Snow2.Player
                 _verticalVelocity = JumpImpulse;
                 _jumpBufferedUntil = -999f;
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-                if (DebugLogs2)
-                {
-                    Debug.Log($"[Snow2DBG2][Player][JumpDo] t={Time.time:0.###} lastGroundedAgo={(Time.time - _lastGroundedAt):0.###} maxNy={_lastMaxGroundNormalY:0.###} contacts={_lastContactCount}", this);
-                }
-#endif
+                // (旧日志已移除) [Snow2DBG2][Player][JumpDo]
             }
 
             // 自定义重力积分（Physics2D.gravity.y 默认约为 -9.81）
             _verticalVelocity += Physics2D.gravity.y * Mathf.Max(0f, GravityScale) * Time.fixedDeltaTime;
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-            if (DebugLogs2 && buffered && !withinCoyote && _jumpBufferedUntil > _jumpBlockLoggedUntil)
-            {
-                _jumpBlockLoggedUntil = _jumpBufferedUntil;
-                var vNow = GetVelocity(_rb);
-                Debug.Log($"[Snow2DBG2][Player][JumpBlocked] t={Time.time:0.###} grounded={_grounded} groundedAgo={(Time.time - _lastGroundedAt):0.###} maxNy={_lastMaxGroundNormalY:0.###} contacts={_lastContactCount} v=({vNow.x:0.###},{vNow.y:0.###})", this);
-            }
-#endif
+            // (旧日志已移除) [Snow2DBG2][Player][JumpBlocked]
 
             // 自定义速度 -> 位移，并用 MovePosition 推进
             var rbPos = _rb.position;
@@ -257,17 +572,7 @@ namespace Snow2.Player
             rbPos.y += (_verticalVelocity + _enemyBumpVelocity.y) * Time.fixedDeltaTime;
             _rb.MovePosition(rbPos);
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-            if (DebugLogs2 && Time.unscaledTime >= _nextDebugAt)
-            {
-                _nextDebugAt = Time.unscaledTime + Mathf.Max(0.05f, DebugLogIntervalSeconds2);
-                var rbPosAfter = _rb.position;
-                var vNow = GetVelocity(_rb);
-                var bufferLeft = Mathf.Max(0f, _jumpBufferedUntil - Time.time);
-                var groundedAgo = Time.time - _lastGroundedAt;
-                Debug.Log($"[Snow2DBG2][Player] pos=({rbPosAfter.x:0.###},{rbPosAfter.y:0.###}) rbV=({vNow.x:0.###},{vNow.y:0.###}) vY={_verticalVelocity:0.###} moveX={_moveX:0.###} grounded={_grounded} maxNy={_lastMaxGroundNormalY:0.###} contacts={_lastContactCount} bufferLeft={bufferLeft:0.###} groundedAgo={groundedAgo:0.###} dt={Time.fixedDeltaTime:0.#####} gScale={GravityScale:0.###}", this);
-            }
-#endif
+            // (旧日志已移除) [Snow2DBG2][Player]
         }
 
         private void UpdateGroundedFromContacts()
@@ -339,6 +644,13 @@ namespace Snow2.Player
             var enemy = collision.collider.GetComponent<EnemyController>();
             if (enemy != null)
             {
+                // Giant Mode：直接撞死普通敌人（Frozen 敌人不处理，避免影响推进雪球玩法）。
+                if (_giantMode && enemy.IsNormal)
+                {
+                    enemy.Kill(Snow2.EnemyClearCause.Other, null);
+                    return;
+                }
+
                 // Frozen 敌人会变成“可推动雪球”，不要把玩家弹开，否则无法推进。
                 if (!enemy.IsFrozen)
                 {
@@ -369,6 +681,12 @@ namespace Snow2.Player
             var enemy = collision.collider.GetComponent<EnemyController>();
             if (enemy != null)
             {
+                if (_giantMode && enemy.IsNormal)
+                {
+                    enemy.Kill(Snow2.EnemyClearCause.Other, null);
+                    return;
+                }
+
                 if (!enemy.IsFrozen)
                 {
                     TryBounceFromEnemy(collision);
