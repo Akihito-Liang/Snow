@@ -57,6 +57,9 @@ namespace Snow2
         [SerializeField, Range(0f, 2f)] private float maxLinearDamping = 0.01f;
 
         [Header("Despawn")]
+        // 需求变更：雪球不应因为“离开屏幕/相机视口”而平白无故消失。
+        // 如需旧行为（离开视口后自动碎裂并销毁），可手动打开该开关。
+        [SerializeField] private bool enableAutoDespawn = false;
         [SerializeField] private float despawnY = -12f;
         [SerializeField, Min(0f)] private float despawnViewportMargin = 0.25f;
 
@@ -151,21 +154,24 @@ namespace Snow2
                 }
             }
 
-            // 飞出屏幕/跌落销毁（触发奖励生成）。
-            if (transform.position.y < despawnY)
+            if (enableAutoDespawn)
             {
-                BreakAndDestroy();
-                return;
-            }
-
-            var cam = UnityEngine.Camera.main;
-            if (cam != null)
-            {
-                var vp = cam.WorldToViewportPoint(transform.position);
-                var m = Mathf.Max(0f, despawnViewportMargin);
-                if (vp.x < -m || vp.x > 1f + m || vp.y < -m)
+                // 可选：飞出屏幕/跌落后碎裂并销毁（会触发奖励生成）。
+                if (transform.position.y < despawnY)
                 {
                     BreakAndDestroy();
+                    return;
+                }
+
+                var cam = UnityEngine.Camera.main;
+                if (cam != null)
+                {
+                    var vp = cam.WorldToViewportPoint(transform.position);
+                    var m = Mathf.Max(0f, despawnViewportMargin);
+                    if (vp.x < -m || vp.x > 1f + m || vp.y < -m)
+                    {
+                        BreakAndDestroy();
+                    }
                 }
             }
         }

@@ -20,7 +20,7 @@ namespace Snow2.Player
         }
 
         public float MoveSpeed = 7f;
-        public float JumpImpulse = 11f;
+        public float JumpImpulse = 100f;
 
         [Header("Ground Check")]
         [Range(0.4f, 0.95f)]
@@ -107,6 +107,13 @@ namespace Snow2.Player
         {
             _rb = GetComponent<Rigidbody2D>();
             _col = GetComponent<Collider2D>();
+
+            // 运行时把玩家放到独立 Layer（Player），便于和 Door/Enemy 做层级隔离。
+            var playerLayer = LayerMask.NameToLayer("Player");
+            if (playerLayer >= 0)
+            {
+                gameObject.layer = playerLayer;
+            }
 
             _baseMoveSpeed = MoveSpeed;
             _baseMoveSpeedCaptured = true;

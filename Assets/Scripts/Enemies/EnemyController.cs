@@ -9,6 +9,9 @@ namespace Snow2.Enemies
 {
     public sealed class EnemyController : MonoBehaviour
     {
+        // RaycastNonAlloc 复用缓冲，避免频繁 GC。
+        private readonly RaycastHit2D[] _rayHits = new RaycastHit2D[8];
+
         public int HitsToFreeze = 3;
         public float KillSpeedThreshold = 4.2f;
         public float PatrolSpeed = 1.6f;
@@ -89,6 +92,13 @@ namespace Snow2.Enemies
             _rb = GetComponent<Rigidbody2D>();
             _box = GetComponent<BoxCollider2D>();
             _circle = GetComponent<CircleCollider2D>();
+
+            // 运行时把敌人放到独立 Layer（Enemy），便于与 Door 做层级隔离。
+            var enemyLayer = LayerMask.NameToLayer("Enemy");
+            if (enemyLayer >= 0)
+            {
+                gameObject.layer = enemyLayer;
+            }
 
             // 运行时兜底：保证敌人是 Dynamic + 可模拟，并锁 Z 旋转。
             // （如果场景里误改为 Static/不模拟，巡逻速度写入不会生效，看起来就“敌人不动”。）
@@ -219,20 +229,8 @@ namespace Snow2.Enemies
             // 预判“下一步”会不会撞到：把本帧位移也算进去。
             var dist = Mathf.Max(0.02f, b.extents.x + WallCheckDistance + Mathf.Abs(PatrolSpeed) * Time.fixedDeltaTime);
 
-            var hit = Physics2D.Raycast(origin, dir, dist);
-            if (hit.collider == null)
-            {
-                return false;
-            }
-            if (hit.collider.isTrigger)
-            {
-                return false;
-            }
-            if (hit.collider.transform == transform)
-            {
-                return false;
-            }
-            return true;
+            // 关键：忽略 Trigger（例如出口门是 Trigger），否则在“起点位于 Trigger 内”时会被误判成无地/撞墙。
+            return RaycastFirstNonTrigger(origin, dir, dist, ~0, out _);
         }
 
         private bool ShouldFlipByEdge()
@@ -262,12 +260,7 @@ namespace Snow2.Enemies
 
         private bool HasGroundWithin(Vector2 origin)
         {
-            var hit = Physics2D.Raycast(origin, Vector2.down, Mathf.Max(0.02f, GroundAheadCheckDepth));
-            if (hit.collider == null)
-            {
-                return false;
-            }
-            if (hit.collider.isTrigger)
+            if (!RaycastFirstNonTrigger(origin, Vector2.down, Mathf.Max(0.02f, GroundAheadCheckDepth), ~0, out var hit))
             {
                 return false;
             }
@@ -280,6 +273,29 @@ namespace Snow2.Enemies
             }
 
             return true;
+        }
+
+        private bool RaycastFirstNonTrigger(Vector2 origin, Vector2 dir, float dist, int layerMask, out RaycastHit2D hit)
+        {
+            var filter = new ContactFilter2D
+            {
+                useTriggers = false,
+                useLayerMask = true,
+                layerMask = layerMask
+            };
+
+            var count = Physics2D.Raycast(origin, dir, filter, _rayHits, Mathf.Max(0.02f, dist));
+            for (var i = 0; i < count; i++)
+            {
+                var h = _rayHits[i];
+                if (h.collider == null) continue;
+                if (h.collider.transform == transform) continue;
+                hit = h;
+                return true;
+            }
+
+            hit = default;
+            return false;
         }
 
         public void ApplySnowHit()

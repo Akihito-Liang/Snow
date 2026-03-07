@@ -1,52 +1,82 @@
-#+#+#+#+############################################################
+########################################################################
 # Snow2（Unity 2D）代码库说明（面向接手/协作）
 ########################################################################
 
 > 目标：5 分钟内搞清楚“项目是什么、入口在哪、怎么跑、怎么改、怎么验证”。
 
-本仓库是一个 Unity 2D 原型项目（URP 2D）。当前玩法主循环是：
+本仓库是一个 Unity 2D 原型项目（URP 2D），玩法接近《雪人兄弟》：
 
-1) 主角发射雪球命中敌人 → 2) 敌人逐步冻结 → 3) 敌人变成可推动雪球（Snowball）→ 4) 雪球滚动吸收/击杀敌人形成连击 → 5) 敌人死亡瞬间随机掉落药水/点心奖励；雪球碎裂时生成寿司 → 6) 清版触发寿司雨。
+1) 主角发射雪球命中敌人 → 2) 敌人逐步冻结 → 3) 敌人变成可推动雪球（`Snow2.Snowball`）
+→ 4) 雪球滚动吸收/击杀敌人形成连击 → 5) 敌人死亡瞬间随机掉落药水/点心奖励
+→ 6) 雪球碎裂时生成寿司 → 7) 清版触发寿司雨。
 
-说明：当前仓库未找到 `CLAUDE.md`（仅存在 `AGENTS.md` 与 `README.md`）。
+说明：仓库内未找到 `CLAUDE.md`（当前仅存在 `AGENTS.md` 与极简 `README.md`）。
 
 ## 1) 引擎与依赖
 
 - Unity 版本：`6000.3.10f1`（见 `ProjectSettings/ProjectVersion.txt:1`）
 - 渲染管线：URP 2D（`com.unity.render-pipelines.universal: 17.3.0`，见 `Packages/manifest.json:16`）
-- 输入系统：Input System（`com.unity.inputsystem: 1.18.0`，见 `Packages/manifest.json:14`；项目启用见 `ProjectSettings/ProjectSettings.asset:683`）
+- 输入系统：Input System（`com.unity.inputsystem: 1.18.0`，见 `Packages/manifest.json:14`）
+- Tilemap（第二关运行时生成用）：`com.unity.2d.tilemap: 1.0.0`（见 `Packages/manifest.json:8`）
 - 测试框架：Unity Test Framework（`com.unity.test-framework: 1.6.0`，见 `Packages/manifest.json:17`）
 
 ## 2) 入口与运行方式
 
-### 场景入口
+### 场景入口（按关卡）
 
-- Build Settings 场景：`Assets/Scenes/SampleScene.unity`（见 `ProjectSettings/EditorBuildSettings.asset:9`）
+- Build Settings 场景：
+  - `Assets/Scenes/Level_01.unity`（见 `ProjectSettings/EditorBuildSettings.asset:9`）
+  - `Assets/Scenes/Level_02.unity`（见 `ProjectSettings/EditorBuildSettings.asset:12`）
+
+说明：关卡命名约定为 `Level_XX`（两位数）。`LevelManager` 会按命名自动切关（`Assets/Scripts/Core/LevelManager.cs:220`）。
 
 ### Editor 运行（推荐）
 
 - 用 Unity Hub / Unity Editor 打开仓库根目录（即包含 `Assets/`、`Packages/`、`ProjectSettings/` 的目录）
-- 打开 `Assets/Scenes/SampleScene.unity` 并 Play
+- 打开 `Assets/Scenes/Level_01.unity` 并 Play
 
 ### 操作说明（当前实现）
 
 - A/D 或 ←/→：移动（Input System + 键盘兜底）
-- Space/W/↑：跳跃（带 Jump Buffer + Coyote Time）
-- 鼠标左键 或 J：发射雪球（`Assets/Scripts/Player/PlayerShooter.cs:24`）
+- Space/W/↑：跳跃（Jump Buffer + Coyote Time）
+- 鼠标左键 或 J：发射雪球（见 `Assets/Scripts/Player/PlayerShooter.cs:24`）
+- 出口门交互：默认需要按 `W`（见 `Assets/Scripts/Core/ExitDoor.cs:20`；可在 Inspector 改键/改为触碰直接触发）
 
-### 道具/强化（当前实现）
+## 3) 关卡系统（Level System）
 
-- 药水：红/蓝/黄/绿为“限时强化”，拾取后角色会叠加变色并在右上角显示倒计时（`Assets/Scripts/Player/PlayerController2D.cs:246`、`Assets/Scripts/Core/GameManager.cs:293`）。
-- 点心奖励：蛋糕/点心为“加分拾取物”（`Assets/Scripts/Rewards/PickupItem.cs:6`）。
-- 掉落来源：药水/蛋糕/点心只在敌人死亡瞬间随机生成并掉落；不会在敌人存活时预先显示（`Assets/Scripts/Enemies/EnemyController.cs:651`）。
+### LevelManager（自动常驻）
 
-## 3) 目录结构（当前仓库）
+- `LevelManager` 通过 `RuntimeInitializeOnLoadMethod` 自动创建并 `DontDestroyOnLoad`（`Assets/Scripts/Core/LevelManager.cs:49`）。
+- 胜利条件：`GetAliveEnemyCount()==0` 且所有启用的 `EnemySpawner` 已结束（`Assets/Scripts/Core/LevelManager.cs:124`、`Assets/Scripts/Core/LevelManager.cs:245`）。
+- 胜利后：可选播放胜利音效，并按 `victoryDelaySeconds` 倒计时加载下一关（`Assets/Scripts/Core/LevelManager.cs:167`、`Assets/Scripts/Core/LevelManager.cs:200`）。
+- 敌人数统计：优先复用 `GameManager.AliveEnemyCount`（旧体系 `EnemyController`），并额外兼容新体系 `EnemyBase`（`Assets/Scripts/Core/LevelManager.cs:267`）。
+
+### ExitDoor（可选门）
+
+- `ExitDoor`：玩家进入门的 Trigger 后，在门范围内按键触发切关（默认 `W`）；可配置“必须清怪后才能进门”（`Assets/Scripts/Core/ExitDoor.cs:14`、`Assets/Scripts/Core/ExitDoor.cs:116`）。
+- 关卡里可手工摆门，也可由 `LevelSetup_02` 运行时生成（见 `Assets/Scripts/Core/LevelSetup_02.cs:287`）。
+
+### EnemySpawner（波次刷怪，Inspector 可配）
+
+- `EnemySpawner` 支持配置 `spawnPoints`、`waves` 与每波的 `SpawnEntry`（`Assets/Scripts/Core/EnemySpawner.cs:23`）。
+- `LevelManager` 会把“所有 spawner 完成 + 场上敌人清空”作为通关门控（`Assets/Scripts/Core/LevelManager.cs:245`）。
+
+### Level_02（第二关）
+
+- `Level_02` 目前是从 `Level_01` 复制的基础场景（保留 Player/Camera/GameManager 等基础物体），实际关卡内容由 `LevelSetup_02` 运行时重建：
+  - 进入时先清理上一关遗留的敌人/门/运行时生成的 Tilemap（`Assets/Scripts/Core/LevelSetup_02.cs:62`）
+  - 运行时生成 Grid + Tilemap，并绘制布局（`Assets/Scripts/Core/LevelSetup_02.cs:166`、`Assets/Scripts/Core/LevelSetup_02.cs:230`）
+  - 运行时按坐标生成敌人，并生成顶层 ExitDoor（`Assets/Scripts/Core/LevelSetup_02.cs:211`、`Assets/Scripts/Core/LevelSetup_02.cs:287`）
+
+补充：`LevelSetup_02` 也支持在 `Level_01` 场景里构建“阶梯攀登型”布局（用于快速原型对比，见 `Assets/Scripts/Core/LevelSetup_02.cs:109`）。
+
+## 4) 目录结构（当前仓库）
 
 ### 关键目录
 
-- `Assets/Scenes/`：场景（当前仅 `SampleScene.unity`）
+- `Assets/Scenes/`：关卡场景（`Level_01.unity`、`Level_02.unity`）
 - `Assets/Scripts/`：运行时代码
-- `Assets/Resources/`：运行时 `Resources.Load` 资源（当前 `Block16.png`）
+- `Assets/Resources/`：运行时 `Resources.Load` 资源（`Block16.png` 用于 `RuntimeSpriteLibrary`）
 - `Assets/Settings/`：URP/2D Renderer/模板场景等资产
 - `Packages/`：Unity Package 依赖与锁定
 - `ProjectSettings/`：项目设置（Unity 版本、Build Settings、输入系统开关等）
@@ -54,78 +84,66 @@
 ### 脚本模块（按目录）
 
 - `Assets/Scripts/Core/`
-  - `GameManager.cs`：分数/全局连击/敌人登记、物理/环境兜底修正、Perfect Clear 触发寿司雨、HUD（`OnGUI`，含右上角药水倒计时）；`Awake` 中确保 `RewardSystem` 存在（`Assets/Scripts/Core/GameManager.cs:51`）
-  - `RuntimeSpriteLibrary.cs`：运行时通用 Sprite（优先 `Resources.Load("Block16")`，圆形/三角形 Sprite 运行时生成）
-  - `Balance/`
-    - `PotionBalance.cs`：药水时长/倍率/颜色与角色变色混合权重（`Assets/Scripts/Core/Balance/PotionBalance.cs:1`）
-    - `EnemyDropBalance.cs`：敌人死亡掉落概率/权重/分值/显示层级/图层命名（`Assets/Scripts/Core/Balance/EnemyDropBalance.cs:1`）
-- `Assets/Scripts/Player/`
-  - `PlayerController2D.cs`：移动/跳跃（InputAction + 键盘兜底）、自定义重力、与敌人“弹开”；药水系统（叠加时长、到期恢复、变色融合、绿药水巨大化）（`Assets/Scripts/Player/PlayerController2D.cs:183`）
-  - `PlayerShooter.cs`：输入触发发射雪球投射物（运行时新建 `GameObject`）；投射物排序提高避免被遮挡（`Assets/Scripts/Player/PlayerShooter.cs:94`）
-- `Assets/Scripts/Projectiles/`
-  - `SnowballProjectile.cs`：投射物直线飞行，命中敌人叠加积雪，命中墙/地消失（Unity 6 用 `linearVelocity` 兼容旧版）
+  - `Balance/EnemyDropBalance.cs`：敌人死亡掉落权重/分数/排序层等常量（`Assets/Scripts/Core/Balance/EnemyDropBalance.cs:5`）
+  - `Balance/PotionBalance.cs`：药水持续时间/倍率/染色常量（`Assets/Scripts/Core/Balance/PotionBalance.cs:5`）
+  - `GameManager.cs`：分数/连击/敌人登记、环境物理兜底、Perfect Clear 寿司雨
+  - `LevelManager.cs`：关卡切换与胜利检测（`Assets/Scripts/Core/LevelManager.cs:22`）
+  - `EnemySpawner.cs`：波次刷怪（`Assets/Scripts/Core/EnemySpawner.cs:15`）
+  - `ExitDoor.cs`：出口门（`Assets/Scripts/Core/ExitDoor.cs:12`）
+  - `LevelSetup_02.cs`：关卡运行时布局与刷怪（Level_01/02 都可用，`Assets/Scripts/Core/LevelSetup_02.cs:17`）
+  - `RuntimeSpriteLibrary.cs`：运行时通用 Sprite（`Resources.Load("Block16")` + 运行时生成圆/三角，见 `Assets/Scripts/Core/RuntimeSpriteLibrary.cs:21`）
 - `Assets/Scripts/Enemies/`
-  - `EnemyController.cs`：敌人巡逻/避墙避悬崖、受击冻结过渡、冻结后挂载 `Snowball` 并切换碰撞体；敌人 Normal 状态使用“与玩家一致的自定义重力”下落；死亡瞬间掉落药水/蛋糕/点心（`Assets/Scripts/Enemies/EnemyController.cs:159`、`Assets/Scripts/Enemies/EnemyController.cs:651`）
-  - `Snowball.cs`：核心雪球玩法（推动、墙反弹计数碎裂、速度阈值开启 Trigger 连击吸收/击杀、碎裂事件）
-- `Assets/Scripts/Rewards/`
-  - `RewardSystem.cs`：监听 `Snowball.Broken`，按击杀数生成寿司（药水不在这里生成）（`Assets/Scripts/Rewards/RewardSystem.cs:36`）
-  - `PickupItem.cs`：拾取逻辑（寿司加分、蛋糕/点心加分；并在运行时把拾取物放到 `Pickup/PowerUp` 图层并忽略与敌人的实体碰撞）（`Assets/Scripts/Rewards/PickupItem.cs:33`）
-- `Assets/Scripts/PowerUps/`
-  - `PowerUpItem.cs`：药水拾取基类（Trigger 进玩家即应用效果并销毁）
-  - `PowerUpDropBody.cs`：药水掉落物理（实体 collider 落地 + trigger 拾取），并忽略与玩家/敌人实体碰撞（`Assets/Scripts/PowerUps/PowerUpDropBody.cs:26`）
-  - `RedPotion.cs`/`BluePotion.cs`/`YellowPotion.cs`/`GreenPotion.cs`：具体药水效果（参数来自 `PotionBalance`）
-- `Assets/Scripts/Camera/`
-  - `CameraFollow2D.cs`：相机平滑跟随（Target 为空时按 Tag `Player` 查找）
+  - `EnemyController.cs`：旧敌人体系（计数/冻结/死亡掉落）；由 `GameManager` 统计敌人存活数（`Assets/Scripts/Enemies/EnemyController.cs:145`）
+  - `Snowball.cs`：核心雪球玩法（推动/撞墙碎裂/连击事件，见 `Assets/Scripts/Enemies/Snowball.cs:24`）
+  - `EnemyBase.cs`：新敌人 AI 基类（数据驱动 + 巡逻 + 受伤变雪球，`Assets/Scripts/Enemies/EnemyBase.cs:19`）
+  - `EnemyDataSO.cs`：新敌人数据（`Assets/Scripts/Enemies/EnemyDataSO.cs:14`）
+  - `RedDemon.cs`：红怪（随机跳跃，`Assets/Scripts/Enemies/RedDemon.cs:11`）
+  - `YellowFatty.cs`：吐火怪（持续伤害区域原型，`Assets/Scripts/Enemies/YellowFatty.cs:14`）
+  - `BlueMonkey.cs`/`FlyBat.cs`/`SumoBody.cs`/`PumpkinBoss.cs`：其余扩展示例敌人
+- `Assets/Scripts/Rewards/`：寿司/蛋糕/点心拾取与奖励生成
+- `Assets/Scripts/PowerUps/`：药水掉落与拾取
+- `Assets/Scripts/Camera/`：相机跟随（注意命名空间为 `Snow2.Camera`，见 `Assets/Scripts/Camera/CameraFollow2D.cs:3`）
 
-## 4) 玩法/数据流（关键事件链）
+## 5) 玩法/数据流（关键事件链）
 
-- 发射：`PlayerShooter` 生成 `SnowballProjectile`（`Assets/Scripts/Player/PlayerShooter.cs:93`）
-- 冻结：投射物命中敌人后调用 `EnemyController.ApplySnowHit()`（`Assets/Scripts/Projectiles/SnowballProjectile.cs:55`）
-- 变球：敌人累计命中达到阈值后 `FreezeFully()`，挂载 `Snowball` 并切换 CircleCollider2D（`Assets/Scripts/Enemies/EnemyController.cs:284`）
-- 连击：`Snowball` 速度超过阈值开启 Trigger，命中敌人后 `AbsorbIntoSnowball` 并累计 combo（`Assets/Scripts/Enemies/Snowball.cs:405`）
-- 掉落：
-  - 敌人死亡瞬间触发 `TryDropDeathItem()`：随机生成药水/蛋糕/点心（`Assets/Scripts/Enemies/EnemyController.cs:651`）
-  - 雪球碎裂/越界触发 `Snowball.Broken`：`RewardSystem` 生成寿司（`Assets/Scripts/Rewards/RewardSystem.cs:36`）
-- HUD/清版：`GameManager` 统计敌人数、显示 HUD；Perfect Clear（同一雪球清掉所有初始敌人）触发寿司雨（`Assets/Scripts/Core/GameManager.cs:156`）
+- 发射：`PlayerShooter` 运行时创建 `SnowballProjectile`（`Assets/Scripts/Player/PlayerShooter.cs:94`）
+- 冻结（旧敌人体系）：投射物命中后调用 `EnemyController.ApplySnowHit()`（`Assets/Scripts/Projectiles/SnowballProjectile.cs:48`）
+- 变雪球（新敌人体系）：`EnemyBase.TakeDamage()` 默认直接挂载 `Snow2.Snowball` 并关闭自身（`Assets/Scripts/Enemies/EnemyBase.cs:148`、`Assets/Scripts/Enemies/EnemyBase.cs:164`）
+- 奖励：`RewardSystem` 监听 `Snowball.Broken`，按“卷入敌人数量”生成寿司（`Assets/Scripts/Rewards/RewardSystem.cs:26`）
+- 药水：当前改为“仅敌人死亡时随机掉落”，并由 `EnemyDropBalance` 控制权重（`Assets/Scripts/Enemies/EnemyController.cs:37`、`Assets/Scripts/Core/Balance/EnemyDropBalance.cs:5`）
 
-## 5) 构建与验证命令（CLI）
+补充：雪球“离开相机视口自动销毁”的行为默认已关闭，避免雪球在屏幕外平白消失；如需旧行为可打开 `enableAutoDespawn`（`Assets/Scripts/Enemies/Snowball.cs:62`）。
+
+## 6) 构建与验证命令（CLI）
 
 仓库内没有自定义 `-executeMethod` 构建脚本；命令行主要用于“导入/编译校验”和“跑测试”。
 
 注意：同一个 Unity 工程同一时间只能被一个 Unity 实例打开；若 Editor 正在打开项目，batchmode 会报错并退出。
 
-- 仅导入/编译校验：
+- 仅导入/编译校验（macOS）：
   - `"/Applications/Unity/Hub/Editor/6000.3.10f1/Unity.app/Contents/MacOS/Unity" -batchmode -nographics -quit -projectPath "<repo>" -logFile -`
-- 跑测试（项目当前未提供自定义 Tests 目录，但框架依赖已在）：
+- 仅导入/编译校验（Windows，路径按实际 Unity Hub 安装调整）：
+  - `"C:\\Program Files\\Unity\\Hub\\Editor\\6000.3.10f1\\Editor\\Unity.exe" -batchmode -nographics -quit -projectPath "<repo>" -logFile -`
+- 跑测试（项目当前未提供 `Assets/Tests`，但框架依赖已在，可按需补充后使用）：
   - `"/Applications/Unity/Hub/Editor/6000.3.10f1/Unity.app/Contents/MacOS/Unity" -batchmode -nographics -quit -projectPath "<repo>" -runTests -testPlatform PlayMode -testResults "<repo>/TestResults.xml" -logFile -`
+- 快速脚本编译烟测（非 Unity，适合本地快速校验 C# 语法/引用）：
+  - `dotnet build "<repo>/Assembly-CSharp.csproj"`
+  - 说明：`Assembly-CSharp.csproj` 通常由 Unity/IDE 生成，可能受本机 Unity/包解析影响；最终仍以 Unity 导入编译结果为准。
 
-### 快速脚本编译（非 Unity，但适合本地快速校验）
+## 7) 代码规范与约定（以当前实现为准）
 
-- `dotnet build "<repo>/Assembly-CSharp.csproj"`
-  - 说明：`Assembly-CSharp.csproj` 由 Unity 生成（文件头写明“Generated file”），可能会在重新生成工程文件时变化；仅建议作为本地/CI 的“快速 C# 编译烟测”，最终仍以 Unity 导入编译结果为准。
+- 命名空间：统一 `Snow2.*`（例如 `Snow2.Player`、`Snow2.Enemies`、`Snow2.Camera`）
+- Unity 6 兼容：速度写入使用编译宏兼容 `Rigidbody2D.linearVelocity`（可参考 `Assets/Scripts/Enemies/EnemyBase.cs:249`）
+- 避免命名冲突：由于项目存在 `namespace Snow2.Camera`，在 `Snow2.*` 命名空间内引用相机请用 `UnityEngine.Camera.main`（例如 `Assets/Scripts/Enemies/PumpkinBoss.cs` 已按此处理）
+- 场景约定：每关一个 Scene，命名 `Level_XX`，并确保加入 Build Settings（见 `ProjectSettings/EditorBuildSettings.asset:9`）
+- 运行时兜底优先：关键组件在 `Awake` 中修正 Rigidbody2D 配置，避免场景误配导致“完全不动”
 
-## 6) 代码规范与约定（以当前实现为准）
+补充约定：
 
-- 命名空间：统一 `Snow2.*`（例如 `Snow2.Player`、`Snow2.Enemies`）
-- 运行时兜底优先：多个组件在 `Awake` 中强制设置 `Rigidbody2D` 为 `Dynamic`/`simulated` 并锁旋转，避免场景误配置导致“完全不动”（例如 `Assets/Scripts/Player/PlayerController2D.cs:106`、`Assets/Scripts/Enemies/EnemyController.cs:86`）
-- Unity 版本兼容：涉及速度写入时用编译宏兼容 `Rigidbody2D.linearVelocity`（`Assets/Scripts/Projectiles/SnowballProjectile.cs:27`、`Assets/Scripts/Enemies/EnemyController.cs:485`）
-- 输入系统：优先 Input System（`ENABLE_INPUT_SYSTEM`），并保留键盘/旧输入兜底以减少“Input 更新模式/焦点问题”带来的不可控（`Assets/Scripts/Player/PlayerController2D.cs:94`）
-- 避免 Tag 依赖：核心玩法逻辑尽量不依赖 Tag（例如雪球墙反弹用碰撞法线判定，避免 Tag 未配置异常；见 `Assets/Scripts/Enemies/Snowball.cs:475`）；仅相机跟随使用 Tag `Player` 作为便捷兜底（`Assets/Scripts/Camera/CameraFollow2D.cs:18`）
+- 平衡参数集中：掉落/药水数值优先放在 `Snow2.Balance`（见 `Assets/Scripts/Core/Balance/EnemyDropBalance.cs:5`、`Assets/Scripts/Core/Balance/PotionBalance.cs:5`），避免散落在多个 MonoBehaviour 里。
 
-### 数值/平衡参数（新增约定）
+## 8) 仓库健康/注意事项
 
-- 玩法数值集中管理：新增 `Snow2.Balance` 命名空间，优先把“可调数值”归档到 `Assets/Scripts/Core/Balance/` 下，而不是散落在各个 MonoBehaviour 的字段上。
-  - 药水相关：`Assets/Scripts/Core/Balance/PotionBalance.cs:1`
-  - 敌人掉落相关：`Assets/Scripts/Core/Balance/EnemyDropBalance.cs:1`
-
-### 物理/图层（新增约定）
-
-- 玩家与普通敌人（Normal）都使用“自定义重力 + MovePosition”以避免 Unity 重力积分被 MovePosition 干扰（`Assets/Scripts/Player/PlayerController2D.cs:524`、`Assets/Scripts/Enemies/EnemyController.cs:159`）。
-- 药水/拾取物应与敌人不发生物理碰撞：
-  - 运行时会尝试把拾取物放到 `Pickup`/`Pickups`/`PowerUp` 图层，找不到则退回 `Ignore Raycast`。
-  - 并在 `Start` 时对敌人 collider 做 `Physics2D.IgnoreCollision` 兜底（`Assets/Scripts/Rewards/PickupItem.cs:45`、`Assets/Scripts/PowerUps/PowerUpDropBody.cs:38`）。
-
-## 7) 仓库健康/注意事项
-
-- 缓存目录：`.gitignore` 已忽略 `Library/`、`Temp/`、`Logs/`、`UserSettings/` 等（见 `.gitignore:4`）；本地运行/导入会生成这些目录，排查问题时优先确认它们没有被误加入版本控制。
-- `Resources` 下资源会进入打包体积；当前 `RuntimeSpriteLibrary` 依赖 `Resources.Load<Sprite>("Block16")`，如资源改名/移动需同步更新（`Assets/Scripts/Core/RuntimeSpriteLibrary.cs:20`）。
+- 缓存目录：`.gitignore` 已忽略 `Library/`、`Temp/`、`Logs/`、`UserSettings/` 等；排查问题时优先确认它们没有被误加入版本控制
+- 包依赖目录：`.gitignore` 会忽略 `Packages/` 目录下除 `manifest.json`/`packages-lock.json` 以外的内容（见 `.gitignore:83`），改包版本时以这两个文件为准
+- `Resources` 下资源会进入打包体积；当前 `RuntimeSpriteLibrary` 依赖 `Resources.Load<Sprite>("Block16")`（`Assets/Scripts/Core/RuntimeSpriteLibrary.cs:21`），如资源改名/移动需同步更新
