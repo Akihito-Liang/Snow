@@ -135,6 +135,55 @@ namespace Snow2
                 rb.gravityScale = 0f;
                 rb.freezeRotation = true;
             }
+
+            // 运行时兜底：把关卡里的台阶（Step1/Step2/...）变成“可从下穿过、从上站住”的单向平台。
+            // 约定：只处理名称以 "Step" 开头的物体，避免影响 Ground/墙体等。
+            SetupOneWaySteps(env);
+        }
+
+        private static void SetupOneWaySteps(GameObject env)
+        {
+            if (env == null)
+            {
+                return;
+            }
+
+            var colliders = env.GetComponentsInChildren<Collider2D>(true);
+            for (var i = 0; i < colliders.Length; i++)
+            {
+                var col = colliders[i];
+                if (col == null)
+                {
+                    continue;
+                }
+
+                var go = col.gameObject;
+                if (go == null)
+                {
+                    continue;
+                }
+
+                // 只把 Step* 当作“台阶”。地面（Ground）按需求不做单向处理。
+                if (!go.name.StartsWith("Step", System.StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                // 确保台阶本身是非 Trigger（单向平台依赖实体碰撞）。
+                col.isTrigger = false;
+                col.usedByEffector = true;
+
+                var effector = go.GetComponent<PlatformEffector2D>();
+                if (effector == null)
+                {
+                    effector = go.AddComponent<PlatformEffector2D>();
+                }
+
+                effector.useOneWay = true;
+                effector.useOneWayGrouping = true;
+                effector.rotationalOffset = 0f;
+                effector.surfaceArc = 180f;
+            }
         }
 
         private void Update()

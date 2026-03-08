@@ -36,6 +36,10 @@ namespace Snow2.Player
         [Min(0f)]
         public float GravityScale = 3f;
 
+        [Header("One-Way Platform (Step)")]
+        [Min(0.05f)]
+        public float DropThroughIgnoreSeconds = 0.25f;
+
         [Header("Bump Bounce (Enemy)")]
         [Min(0f)]
         public float EnemyBumpBounceMultiplier = 1.0f;
@@ -55,6 +59,13 @@ namespace Snow2.Player
         private Collider2D _col;
         private float _moveX;
         private bool _grounded;
+
+        // One-way platform (Step*)
+        private Collider2D _groundCollider;
+        private bool _groundIsOneWay;
+        private bool _dropRequested;
+        private Collider2D _dropIgnoredCollider;
+        private float _dropIgnoreUntil;
 
         // Power-Ups
         private float _baseMoveSpeed;
@@ -204,6 +215,7 @@ namespace Snow2.Player
             var usedFallback = false;
 
             var jumpPressedThisFrame = false;
+            var dropPressedThisFrame = false;
 
 #if ENABLE_INPUT_SYSTEM
             EnsureActions();
@@ -224,6 +236,12 @@ namespace Snow2.Player
             {
                 jumpPressedThisFrame = true;
             }
+
+            // 台阶下落：只认键盘 S（不与移动轴绑定，避免手柄/摇杆误触）。
+            if (Keyboard.current != null && Keyboard.current.sKey.wasPressedThisFrame)
+            {
+                dropPressedThisFrame = true;
+            }
 #endif
 
 #if !ENABLE_INPUT_SYSTEM
@@ -236,6 +254,11 @@ namespace Snow2.Player
             {
                 jumpPressedThisFrame = true;
             }
+
+            if (Input.GetKeyDown(KeyCode.S))
+            {
+                dropPressedThisFrame = true;
+            }
 #endif
 
             if (jumpPressedThisFrame)
@@ -243,6 +266,11 @@ namespace Snow2.Player
                 _jumpBufferedUntil = Time.time + Mathf.Max(0f, JumpBufferSeconds);
 
                 // (旧日志已移除) [Snow2DBG2][Player][JumpPress]
+            }
+
+            if (dropPressedThisFrame)
+            {
+                _dropRequested = true;
             }
 
             if (Mathf.Abs(_moveX) > 0.01f)
@@ -535,6 +563,17 @@ namespace Snow2.Player
                 return;
             }
 
+            // 到时间后恢复与台阶的碰撞
+            if (_dropIgnoredCollider != null && Time.time >= _dropIgnoreUntil)
+            {
+                if (_col != null)
+                {
+                    Physics2D.IgnoreCollision(_col, _dropIgnoredCollider, false);
+                }
+                _dropIgnoredCollider = null;
+                _dropIgnoreUntil = -999f;
+            }
+
             // 外力/反弹速度逐步衰减（用于玩家与敌人接触时的“弹开”）。
             if (_enemyBumpVelocity.sqrMagnitude > 0.0001f)
             {
@@ -547,6 +586,16 @@ namespace Snow2.Player
             }
 
             UpdateGroundedFromContacts();
+
+            // 仅当“站在台阶上”时允许按 S 掉落。站在地面（Ground）上按 S 无效。
+            if (_dropRequested)
+            {
+                _dropRequested = false;
+                if (_grounded && _groundIsOneWay && _groundCollider != null)
+                {
+                    BeginDropThroughOneWayPlatform(_groundCollider);
+                }
+            }
 
             if (_grounded)
             {
@@ -587,10 +636,14 @@ namespace Snow2.Player
             if (_col == null)
             {
                 _grounded = false;
+                _groundCollider = null;
+                _groundIsOneWay = false;
                 return;
             }
 
             _grounded = false;
+            _groundCollider = null;
+            _groundIsOneWay = false;
             _lastMaxGroundNormalY = -1f;
             var count = _col.GetContacts(_contacts);
             _lastContactCount = count;
@@ -616,9 +669,42 @@ namespace Snow2.Player
                 if (c.normal.y >= GroundNormalThreshold)
                 {
                     _grounded = true;
+                    _groundCollider = c.collider;
+                    _groundIsOneWay = IsOneWayPlatformCollider(c.collider);
                     return;
                 }
             }
+        }
+
+        private void BeginDropThroughOneWayPlatform(Collider2D platformCollider)
+        {
+            if (_col == null || platformCollider == null)
+            {
+                return;
+            }
+
+            // 与当前脚下的平台临时忽略碰撞，从而“掉下去”。
+            Physics2D.IgnoreCollision(_col, platformCollider, true);
+            _dropIgnoredCollider = platformCollider;
+            _dropIgnoreUntil = Time.time + Mathf.Max(0.05f, DropThroughIgnoreSeconds);
+
+            // 立即进入下落状态（避免自定义重力被 grounded 逻辑抵消）。
+            _grounded = false;
+            _groundCollider = null;
+            _groundIsOneWay = false;
+            _lastGroundedAt = -999f;
+            _verticalVelocity = Mathf.Min(_verticalVelocity, -2f);
+        }
+
+        private static bool IsOneWayPlatformCollider(Collider2D col)
+        {
+            if (col == null)
+            {
+                return false;
+            }
+
+            // 约定：台阶运行时会被加上 PlatformEffector2D（见 GameManager.SetupOneWaySteps）。
+            return col.GetComponent<PlatformEffector2D>() != null || col.GetComponentInParent<PlatformEffector2D>() != null;
         }
 
         private static Vector2 GetVelocity(Rigidbody2D rb)
