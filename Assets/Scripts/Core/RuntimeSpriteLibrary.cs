@@ -7,6 +7,7 @@ namespace Snow2
         private static Sprite _block;
         private static Sprite _circle;
         private static Sprite _triangle;
+        private static Sprite _heart;
 
         // 原型阶段：优先从 Resources 加载素材；必要时允许运行时生成（例如圆形雪球）。
         public static Sprite WhiteSprite
@@ -108,6 +109,66 @@ namespace Snow2
 
                 _triangle = Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), pixelsPerUnit: 64f);
                 return _triangle;
+            }
+        }
+
+        public static Sprite HeartSprite
+        {
+            get
+            {
+                if (_heart != null)
+                {
+                    return _heart;
+                }
+
+                // 生成一个透明背景的白色爱心 Sprite（用于 HP UI）。
+                // 为避免额外资源文件，本项目在运行时生成。
+                const int size = 64;
+                var tex = new Texture2D(size, size, TextureFormat.RGBA32, mipChain: false)
+                {
+                    filterMode = FilterMode.Bilinear,
+                    wrapMode = TextureWrapMode.Clamp
+                };
+
+                // 使用经典心形隐式函数：(x^2 + y^2 - 1)^3 - x^2 y^3 <= 0
+                // 通过 2x2 supersampling 做简单抗锯齿。
+                var pixels = new Color32[size * size];
+                for (var y = 0; y < size; y++)
+                {
+                    for (var x = 0; x < size; x++)
+                    {
+                        float coverage = 0f;
+                        for (var sy = 0; sy < 2; sy++)
+                        {
+                            for (var sx = 0; sx < 2; sx++)
+                            {
+                                var fx = (x + (sx + 0.25f) * 0.5f) / (size - 1f);
+                                var fy = (y + (sy + 0.25f) * 0.5f) / (size - 1f);
+
+                                // 映射到 [-1.25, 1.25]，并稍微把心形往上移一点，让底部更尖。
+                                var xx = (fx - 0.5f) * 2.5f;
+                                var yy = (fy - 0.42f) * 2.5f;
+
+                                var a = xx * xx + yy * yy - 1f;
+                                var f = a * a * a - (xx * xx) * (yy * yy * yy);
+                                if (f <= 0f)
+                                {
+                                    coverage += 1f;
+                                }
+                            }
+                        }
+                        coverage *= 0.25f;
+
+                        var idx = y * size + x;
+                        pixels[idx] = new Color(1f, 1f, 1f, Mathf.Clamp01(coverage));
+                    }
+                }
+
+                tex.SetPixels32(pixels);
+                tex.Apply(updateMipmaps: false, makeNoLongerReadable: true);
+
+                _heart = Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), pixelsPerUnit: 64f);
+                return _heart;
             }
         }
 

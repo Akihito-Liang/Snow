@@ -11,6 +11,7 @@ namespace Snow2.Rewards
         Potion,
         Cake,
         Snack,
+        Heart,
     }
 
     public sealed class PickupItem : MonoBehaviour
@@ -18,6 +19,7 @@ namespace Snow2.Rewards
         public PickupType Type;
         public int SushiScore = 10;
         public int RewardScore = 15;
+        public int HeartHealAmount = 1;
         public float DespawnY = -12f;
 
         // 需求：掉落物应该能“落在地面/台阶上”，而不是穿透。
@@ -206,8 +208,16 @@ namespace Snow2.Rewards
             }
 
             // 玩家 Collider 可能在子节点上，组件在父节点上。
-            if (other.GetComponentInParent<PlayerController2D>() == null)
+            var player = other.GetComponentInParent<PlayerController2D>();
+            if (player == null)
             {
+                return;
+            }
+
+            if (Type == PickupType.Heart)
+            {
+                player.Heal(Mathf.Max(1, HeartHealAmount));
+                Destroy(gameObject);
                 return;
             }
 

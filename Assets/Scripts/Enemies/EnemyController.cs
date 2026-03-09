@@ -684,7 +684,8 @@ namespace Snow2.Enemies
             var pW = Mathf.Max(0f, EnemyDropBalance.PotionWeight);
             var cW = Mathf.Max(0f, EnemyDropBalance.CakeWeight);
             var sW = Mathf.Max(0f, EnemyDropBalance.SnackWeight);
-            var sum = pW + cW + sW;
+            var hW = Mathf.Max(0f, EnemyDropBalance.HeartWeight);
+            var sum = pW + cW + sW + hW;
             if (sum <= 0.0001f)
             {
                 return;
@@ -700,9 +701,13 @@ namespace Snow2.Enemies
             {
                 SpawnScorePickupAt(pos, isCake: true);
             }
-            else
+            else if (roll < pW + cW + sW)
             {
                 SpawnScorePickupAt(pos, isCake: false);
+            }
+            else
+            {
+                SpawnHeartPickupAt(pos);
             }
         }
 
@@ -770,6 +775,24 @@ namespace Snow2.Enemies
             var pickup = go.AddComponent<PickupItem>();
             pickup.Type = isCake ? PickupType.Cake : PickupType.Snack;
             pickup.RewardScore = isCake ? EnemyDropBalance.CakeScore : EnemyDropBalance.SnackScore;
+            pickup.DespawnY = -12f;
+        }
+
+        private void SpawnHeartPickupAt(Vector2 position)
+        {
+            var go = new GameObject("Pickup_Heart");
+            go.layer = GetPickupLayer();
+            go.transform.position = position;
+            go.transform.localScale = Vector3.one * EnemyDropBalance.HeartScale;
+
+            var sr = go.AddComponent<SpriteRenderer>();
+            sr.sprite = RuntimeSpriteLibrary.HeartSprite;
+            sr.color = EnemyDropBalance.HeartColor;
+            sr.sortingOrder = EnemyDropBalance.HeartSortingOrder;
+
+            var pickup = go.AddComponent<PickupItem>();
+            pickup.Type = PickupType.Heart;
+            pickup.HeartHealAmount = 1;
             pickup.DespawnY = -12f;
         }
 

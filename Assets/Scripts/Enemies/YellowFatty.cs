@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.Events;
 using Snow2;
+using Snow2.Player;
 
 namespace Snow2.Enemies
 {
@@ -135,6 +136,10 @@ namespace Snow2.Enemies
         [SerializeField, Min(0.05f)] private float damageTickSeconds = 0.25f;
         [SerializeField] private LayerMask targetMask = ~0;
 
+        [Header("Damage")]
+        [SerializeField] private bool applyDamageToPlayer = true;
+        [SerializeField, Min(1)] private int damageAmount = 1;
+
         [Header("Hook")]
         public UnityEvent OnDamageTick;
 
@@ -174,6 +179,18 @@ namespace Snow2.Enemies
             }
 
             _nextTickAt = Time.time + Mathf.Max(0.05f, damageTickSeconds);
+
+            if (applyDamageToPlayer)
+            {
+                // 伤害入口：命中玩家就扣血；玩家自己负责无敌帧/闪烁。
+                var player = other.GetComponent<PlayerController2D>();
+                if (player == null) player = other.GetComponentInParent<PlayerController2D>();
+                if (player != null)
+                {
+                    player.ApplyDamage(Mathf.Max(1, damageAmount));
+                }
+            }
+
             OnDamageTick?.Invoke();
         }
     }

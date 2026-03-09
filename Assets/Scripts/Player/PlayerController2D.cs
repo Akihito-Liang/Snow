@@ -36,6 +36,11 @@ namespace Snow2.Player
         [Min(0f)]
         public float GravityScale = 3f;
 
+        [Header("HP")]
+        [SerializeField, Min(1)] private int maxHP = 3;
+        [SerializeField, Min(0f)] private float invincibleSeconds = 1.0f;
+        [SerializeField, Min(0.02f)] private float blinkIntervalSeconds = 0.10f;
+
         [Header("One-Way Platform (Step)")]
         [Min(0.05f)]
         public float DropThroughIgnoreSeconds = 0.25f;
@@ -82,6 +87,14 @@ namespace Snow2.Player
         private SpriteRenderer[] _tintRenderers;
         private Color[] _tintBaseColors;
         private bool _tintCaptured;
+
+        // HP / i-frame
+        public int HP { get; private set; }
+        public int MaxHP => Mathf.Max(1, maxHP);
+        public bool IsInvincible => Time.time < _invincibleUntil;
+        private float _invincibleUntil;
+        private Coroutine _blinkRoutine;
+        private bool _dead;
 
         private bool _giantMode;
         private float _giantUntil;
@@ -151,6 +164,140 @@ namespace Snow2.Player
             {
                 _potionMultiplier[i] = 1f;
             }
+
+            HP = MaxHP;
+        }
+
+        /// <summary>
+        /// 玩家受伤入口：扣血并触发 1s 无敌帧（闪烁）。
+        /// 返回 true 表示这次确实扣到血；false 表示当前处于无敌帧或 amount 无效。
+        /// </summary>
+        public bool ApplyDamage(int amount = 1)
+        {
+            if (amount <= 0)
+            {
+                return false;
+            }
+            if (_giantMode)
+            {
+                return false;
+            }
+            if (IsInvincible)
+            {
+                return false;
+            }
+            if (HP <= 0 || _dead)
+            {
+                return false;
+            }
+
+            HP = Mathf.Max(0, HP - amount);
+            _invincibleUntil = Time.time + Mathf.Max(0f, invincibleSeconds);
+
+            if (HP <= 0)
+            {
+                Die();
+                return true;
+            }
+
+            if (_blinkRoutine != null)
+            {
+                StopCoroutine(_blinkRoutine);
+                _blinkRoutine = null;
+            }
+            _blinkRoutine = StartCoroutine(BlinkRoutine());
+            return true;
+        }
+
+        /// <summary>
+        /// 回复生命值（拾取红心用）。
+        /// </summary>
+        public bool Heal(int amount = 1)
+        {
+            if (amount <= 0)
+            {
+                return false;
+            }
+            if (HP <= 0 || _dead)
+            {
+                return false;
+            }
+            if (HP >= MaxHP)
+            {
+                return false;
+            }
+
+            HP = Mathf.Min(MaxHP, HP + amount);
+            return true;
+        }
+
+        private void Die()
+        {
+            if (_dead)
+            {
+                return;
+            }
+            _dead = true;
+
+            // 停止闪烁并保持可见
+            _invincibleUntil = -999f;
+            if (_blinkRoutine != null)
+            {
+                StopCoroutine(_blinkRoutine);
+                _blinkRoutine = null;
+            }
+            CaptureTintTargetsIfNeeded();
+            if (_tintRenderers != null)
+            {
+                for (var i = 0; i < _tintRenderers.Length; i++)
+                {
+                    var sr = _tintRenderers[i];
+                    if (sr == null) continue;
+                    sr.enabled = true;
+                }
+            }
+
+            // 通知 GameManager 做 Game Over 处理
+            if (Snow2.GameManager.Instance != null)
+            {
+                Snow2.GameManager.Instance.OnPlayerDied();
+            }
+        }
+
+        private System.Collections.IEnumerator BlinkRoutine()
+        {
+            // 使用 SpriteRenderer.enabled 做闪烁，避免干扰药水 tint（color 叠加）。
+            CaptureTintTargetsIfNeeded();
+
+            var interval = Mathf.Max(0.02f, blinkIntervalSeconds);
+            var visible = true;
+
+            while (Time.time < _invincibleUntil)
+            {
+                visible = !visible;
+                if (_tintRenderers != null)
+                {
+                    for (var i = 0; i < _tintRenderers.Length; i++)
+                    {
+                        var sr = _tintRenderers[i];
+                        if (sr == null) continue;
+                        sr.enabled = visible;
+                    }
+                }
+                yield return new WaitForSeconds(interval);
+            }
+
+            if (_tintRenderers != null)
+            {
+                for (var i = 0; i < _tintRenderers.Length; i++)
+                {
+                    var sr = _tintRenderers[i];
+                    if (sr == null) continue;
+                    sr.enabled = true;
+                }
+            }
+
+            _blinkRoutine = null;
         }
 
         // 旧调试日志（Snow2DBG2）已停用：如需排查请在对应模块打开新的专用日志开关。
@@ -658,7 +805,7 @@ namespace Snow2.Player
                 {
                     continue;
                 }
-                if (c.collider.GetComponent<EnemyController>() != null)
+                if (c.collider.GetComponent<EnemyController>() != null || c.collider.GetComponent<EnemyBase>() != null)
                 {
                     continue;
                 }
@@ -747,8 +894,18 @@ namespace Snow2.Player
                 // Frozen 敌人会变成“可推动雪球”，不要把玩家弹开，否则无法推进。
                 if (!enemy.IsFrozen)
                 {
+                    ApplyDamage(1);
                     TryBounceFromEnemy(collision);
                 }
+                return;
+            }
+
+            // 新敌人体系（EnemyBase）：同样按“碰到敌人”扣血。
+            var enemy2 = collision.collider.GetComponent<EnemyBase>();
+            if (enemy2 != null && enemy2.isActiveAndEnabled)
+            {
+                ApplyDamage(1);
+                // EnemyBase 不需要这里的反弹（避免影响其自身移动/推雪球逻辑）。
                 return;
             }
 
@@ -782,8 +939,16 @@ namespace Snow2.Player
 
                 if (!enemy.IsFrozen)
                 {
+                    ApplyDamage(1);
                     TryBounceFromEnemy(collision);
                 }
+                return;
+            }
+
+            var enemy2 = collision.collider.GetComponent<EnemyBase>();
+            if (enemy2 != null && enemy2.isActiveAndEnabled)
+            {
+                ApplyDamage(1);
             }
         }
 

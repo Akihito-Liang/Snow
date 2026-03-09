@@ -14,6 +14,7 @@ namespace Snow2.Balance
         public const float PotionWeight = 2.0f;
         public const float CakeWeight = 0.7f;
         public const float SnackWeight = 1.2f;
+        public const float HeartWeight = 0.55f;
 
         // Scores
         public const int CakeScore = 30;
@@ -31,9 +32,12 @@ namespace Snow2.Balance
         // Visuals
         public static readonly Color CakeColor = new Color(1f, 0.55f, 0.75f, 1f);
         public static readonly Color SnackColor = new Color(1f, 0.75f, 0.2f, 1f);
+        public static readonly Color HeartColor = new Color(1f, 0.65f, 0.72f, 1f);
         public const float PotionScale = 0.55f;
         public const float CakeSnackScale = 0.5f;
+        public const float HeartScale = 0.50f;
         public const int PotionSortingOrder = 25;
         public const int RewardSortingOrder = 22;
+        public const int HeartSortingOrder = 28;
     }
 }

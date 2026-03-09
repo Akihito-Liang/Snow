@@ -109,6 +109,7 @@ namespace Snow2
             }
 
             EnsureTriggerCollider();
+            bounceDebugLogs = true;
         }
 
         private void Update()
@@ -439,17 +440,33 @@ namespace Snow2
             }
 
             // 关键修复：用“入射速度”而不是当前 rb 速度。
-            // Unity 的 2D 物理解算有时会在回调触发前把 rb 速度解算成接近 0，
-            // 此时直接 Reflect(rb.velocity) 会导致“撞墙后停住”。
-            // 入射速度优先用 rb 当前速度；如果它已被物理解算“清零”，再回退用 relativeVelocity。
-            // 注意：对静态墙来说，relativeVelocity 近似等于 (other - self) = -selfVel，所以需要取反。
+            // Unity 2D 在某些情况下会在回调触发前把“撞墙方向的分量”解算得很小（常见于：空中贴墙/连续碰撞）。
+            // 这会导致 rbV.x 变成接近 0，从而 Reflect 后看起来“不会反弹、直接贴墙落下”。
+            // 因此：入射速度优先用 rb 当前速度；但当 rbV.x 明显小于 relativeVelocity.x 时，使用 relativeVelocity 作为入射速度。
             var rbV = GetVelocity(_rb);
             var incident = rbV;
             var usedRelative = false;
-            if (incident.sqrMagnitude < 0.0004f)
+
+            // relativeVelocity（Unity）：通常为 otherVel - selfVel。
+            // 我们需要“self 相对 other 的入射速度” => selfVel - otherVel = -relativeVelocity。
+            var relIncident = -collision.relativeVelocity;
+
+            // Case 1：整体速度几乎为 0（传统兜底）
+            if (incident.sqrMagnitude < 0.0004f && relIncident.sqrMagnitude > 0.0004f)
             {
                 usedRelative = true;
-                incident = -collision.relativeVelocity;
+                incident = relIncident;
+            }
+            else
+            {
+                // Case 2：速度主要在 y，但 x 被解算“清掉”了（空中撞墙常见）
+                var ax = Mathf.Abs(incident.x);
+                var rx = Mathf.Abs(relIncident.x);
+                if (rx > 0.08f && ax < rx * 0.5f)
+                {
+                    usedRelative = true;
+                    incident = relIncident;
+                }
             }
 
             // 确保法线朝向正确：incident 应该指向墙面（与法线点积为负）。
@@ -489,6 +506,11 @@ namespace Snow2
 #endif
 
             SetVelocity(_rb, reflected);
+
+            // 防止“贴墙落下”：反弹后把雪球轻微推离墙体，避免下一帧仍保持深度接触导致 x 分量被持续解算掉。
+            // 这里用碰撞法线方向（从墙指向雪球）做很小的位移。
+            var p0 = _rb.position;
+            _rb.position = p0 + n * 0.02f;
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             if (sb != null)

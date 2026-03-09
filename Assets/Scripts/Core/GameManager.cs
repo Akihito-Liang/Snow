@@ -47,6 +47,9 @@ namespace Snow2
 
         private PlayerController2D _hudPlayer;
 
+        private bool _gameOver;
+        private float _gameOverAt;
+
 
         private void Awake()
         {
@@ -188,10 +191,39 @@ namespace Snow2
 
         private void Update()
         {
+            if (_gameOver)
+            {
+                return;
+            }
             if (Combo > 0 && Time.time > _comboExpireAt)
             {
                 Combo = 0;
                 _clearedSinceComboStart = 0;
+            }
+        }
+
+        public void OnPlayerDied()
+        {
+            if (_gameOver)
+            {
+                return;
+            }
+            _gameOver = true;
+            _gameOverAt = Time.unscaledTime;
+
+            // 停止游戏（OnGUI 仍会继续渲染）
+            Time.timeScale = 0f;
+
+            // 尽量禁用玩家输入（防止某些系统使用 unscaled time 仍响应）
+            if (_hudPlayer == null)
+            {
+                _hudPlayer = FindAnyObjectByType<PlayerController2D>();
+            }
+            if (_hudPlayer != null)
+            {
+                _hudPlayer.enabled = false;
+                var shooter = _hudPlayer.GetComponent<Snow2.Player.PlayerShooter>();
+                if (shooter != null) shooter.enabled = false;
             }
         }
 
@@ -369,8 +401,55 @@ namespace Snow2
             }
             if (_hudPlayer != null)
             {
+                DrawHPHeartsHUD(_hudPlayer);
                 DrawPotionCountdownHUD(_hudPlayer);
             }
+
+            if (_gameOver)
+            {
+                var big = new GUIStyle(GUI.skin.label)
+                {
+                    fontSize = 44,
+                    alignment = TextAnchor.MiddleCenter,
+                };
+                big.normal.textColor = Color.white;
+                GUI.Label(new Rect(0, Screen.height * 0.40f, Screen.width, 70), "游戏结束", big);
+            }
+        }
+
+        private static void DrawHPHeartsHUD(PlayerController2D player)
+        {
+            if (player == null)
+            {
+                return;
+            }
+
+            var heart = RuntimeSpriteLibrary.HeartSprite;
+            if (heart == null || heart.texture == null)
+            {
+                return;
+            }
+
+            var hp = Mathf.Clamp(player.HP, 0, player.MaxHP);
+            var max = Mathf.Clamp(player.MaxHP, 1, 99);
+            var drawMax = Mathf.Min(3, max); // 需求：固定 3 格血
+
+            const float size = 26f;
+            const float pad = 4f;
+            var x = 10f;
+            var y = 140f;
+
+            var oldColor = GUI.color;
+            var full = new Color(1f, 0.65f, 0.72f, 1f);   // 浅红色
+            var empty = new Color(1f, 0.65f, 0.72f, 0.25f);
+
+            for (var i = 0; i < drawMax; i++)
+            {
+                GUI.color = (i < hp) ? full : empty;
+                GUI.DrawTexture(new Rect(x + i * (size + pad), y, size, size), heart.texture);
+            }
+
+            GUI.color = oldColor;
         }
 
         private static void DrawPotionCountdownHUD(PlayerController2D player)
